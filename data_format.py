@@ -1,9 +1,10 @@
 import numpy as np
+import sys
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import matplotlib
 import math
-from general import svdinvert, wprint, DEBUG, eprint, dprint, HARTS
+from general import svdinvert, wprint, DEBUG, eprint, HARTS,dprint
 from bfloat16 import bfloat16
 
 # select if want to plot L**-1
@@ -24,7 +25,6 @@ color_palette = [
 color_palette = [(r/255,g/255,b/255) for (r,g,b) in color_palette]
 color_palette.reverse()
 
-
 class Tile:
     ''' Abstract class to contain a tile. Inherit this by a tile class that is also a cointainer for data.'''
     def __init__(self,rowa,rowz,cola,colz):
@@ -35,11 +35,16 @@ class Tile:
 
     def empty_copy(self):
         # call super class __init__
-        new = type(self)(self.rowa,self.rowz,self.cola,self.colz)
-        return new
+        return type(self)(self.rowa,self.rowz,self.cola,self.colz)
 
     def is_diag(self):
         return self.rowa==self.cola and self.rowz==self.colz
+
+    def is_rect(self):
+        return not self.is_diag()
+
+    def assigned_data(self):
+        return self.nnz()
 
     def density(self):
         if self.is_diag:
@@ -59,24 +64,25 @@ class Tile:
 
     def show_on_plot(self,ax,number=None):
         plotobjs = []
-        if self.is_diag():
-            color = 'r'
-            x = [self.cola-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
-            y = [self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
-        else:
+        if self.is_rect():
             color = 'b'
             x = [self.cola-0.5,self.colz-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
             y = [self.rowa-0.5,self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
+        else:
+            color = 'purple'
+            x = [self.cola-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
+            y = [self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
+        if self.is_diag():
+            color = 'purple'
         lines = ax.plot(x,y,color=color,linewidth=1.5)
         plotobjs.extend(lines)
         if number is not None:
-            xmid = -0.5 + self.cola + 0.5*(self.colz-self.cola) 
+            xmid = -0.5 + self.cola + 0.5*(self.colz-self.cola)
             ymid = -0.5 + self.rowa + 0.5*(self.rowz-self.rowa)
             label = f' s{number}\n{self.classname()}'
             txt = ax.text(xmid,ymid,label,fontsize=17,color=color,ha='center',va='center')
             plotobjs.append(txt)
         return plotobjs
-
 
 class Collist(Tile,dict):
     # dictionary containting data:
@@ -135,6 +141,21 @@ class Collist(Tile,dict):
                 sq_dict[r][c].set_color(color)
         return []
 
+    def schedule(self,num_cores=HARTS):
+        # each worker has a list of columns
+        dist = [self.empty_copy() for h in range(num_cores)]
+        load = np.zeros(num_cores)
+        # sort columns by length. The work is a Collist data structure.
+        # It has the structure: {col_num: (Li,Lx)}
+        sorted_cols = sorted(self.items(), key=lambda item: len(item[1][0]),reverse=True)
+        # assign next longest column to least busy core.
+        for col,(Li,Lx) in sorted_cols:
+            least_busy_worker = np.argmin(load)
+            # TODO: have more complex performance function to balance scheduling
+            load[least_busy_worker] += len(Li)
+            dist[least_busy_worker][col] = (Li,Lx)
+        return dist
+
 class Empty(Tile):
     def __init__(self,collist):
         assert(isinstance(collist,Collist))
@@ -149,13 +170,16 @@ class Empty(Tile):
     def empty(self):
         return True
 
-class Fold(Tile):
-    def __init__(self,collist):
+class Diaginv(Tile):
+    def __init__(self,collist,empty=False):
         assert(isinstance(collist,Collist))
         self.rowa = collist.rowa
         self.rowz = collist.rowz
         self.cola = collist.cola
         self.colz = collist.colz
+
+        # rows assigned to this instance (offset by -collist.rowa)
+        self.assigned_rows = []
 
         # get dimensions
         self.n = self.rowz-self.rowa
@@ -164,15 +188,31 @@ class Fold(Tile):
         assert(self.n > 1) # 1x1 lower triag is just empty
 
         # fill matrix with data
-        self.dense_triag = np.eye(self.n)
-        for col,(Li,Lx) in collist.items():
-            for i,x in zip(Li,Lx):
-                r,c = col-self.offset, i - self.offset
-                assert(r < c)
-                self.dense_triag[r][c] = x
+        if not empty:
+            self.assigned_rows = list(range(self.n,1))
+            #
+            self.dense_triag = np.eye(self.n)
+            for col,(Li,Lx) in collist.items():
+                for i,x in zip(Li,Lx):
+                    r,c = col-self.offset, i - self.offset
+                    assert(r < c)
+                    self.dense_triag[r][c] = x
 
-        # invert
-        self.dense_inverse = np.linalg.inv(self.dense_triag)
+            # invert
+            self.dense_inverse = np.linalg.inv(self.dense_triag)
+            # check numerical stability
+            self.check_numerical_stability()
+
+    def empty_copy(self):
+        tmp = Diaginv(self.rowa,self.rowz,self.cola,self.colz,empty=True)
+        # copy pointers to data
+        tmp.dense_triag = self.dense_triag
+        tmp.dense_inverse = self.dense_inverse
+        return tmp
+
+    def is_rect(self):
+        ''' We also store the upper triangular zeros. '''
+        return True
 
     def check_numerical_stability(self):
         # check numerical stability of inverse
@@ -198,20 +238,53 @@ class Fold(Tile):
         else:
             print(f'\tInverse err on random input: = {maxerr:.2e}.')
 
+    def assigned_data(self):
+        return sum(self.assigned_rows)
+
     def nnz(self):
         return np.count_nonzero(self.dense_triag) - self.n
 
     def empty_copy(self):
         tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
-        return Fold(tmp)
+        return Diaginv(tmp,empty=True)
 
     def color_dict(self, sq_dict, color):
-        pass
+        patches = []
+        for ri in self.assigned_rows:
+            for ci in range(ri):
+                r = ri + self.rowa
+                c = ci + self.cola
+                if c in sq_dict[r]:
+                    sq_dict[r][c].set_color(color)
+                else:
+                    box = plt.Rectangle((c-.5,r-.5), 1, 1, fc=color ,ec='b',lw=1)
+                    patches.append(box)
+        return patches
 
-    def metaSchedule(self):
-        # Extract Rows and metadata without index data
-        # TODO: generate different layout!
-        meta = []
+    def schedule(self,num_cores=HARTS):
+        assert(len(self.assigned_rows) == 0)
+        dist = [self.empty_copy() for h in range(num_cores)]
+        # compute list of rows for each worker
+        tmp = list(range(num_cores)) #H0, H1, H2
+        tmpr = list(range(num_cores)) #H0, H1, H2
+        tmpr.reverse()
+        tmp.extend(tmpr) #H0 H1 H2 H2 H1 H0
+        for i,r in enumerate(range(self.rowz-self.rowa-1,0,-1)): # first col is empty
+            core = tmp[i%(2*num_cores)]
+            dprint(f'Assigning: r{r} H{core}\t',end='')
+            dist[core].assigned_rows.append(r)
+        dprint()
+        return dist
+
+class Fold(Diaginv,Tile):
+    def empty_copy(self):
+        raise NotImplementedError()
+        tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
+        return Fold(tmp)
+    def schedule(self,num_cores=HARTS):
+        assert(len(self.assigned_rows) == 0)
+        raise NotImplementedError()
+        cols = []
         for row in range(1,self.n):
             val = self.Tinv[row][0:row]
             assert(len(val) == row)
@@ -572,56 +645,3 @@ def sparse2blockedTwice(Lp,Li,Lx):
         LxFp16[ix] = b
         ix += 1
     return (newLp2,newLi2,LxFp16)
-
-
-class MetaRowSched():
-    ''' Meta Data based Row Scheduling of Data onto Hearts. By now I am like facebook: deprived of name ideas. '''
-    def __init__(self,Pmeta,PRi,PRx,slen=None,method=''):
-        self.Pmeta = Pmeta
-        self.PRi = PRi
-        self.PRx = PRx
-        self.method = method
-        if slen is None:
-            raise NotImplementedError
-        self.slen = slen
-
-    def color_dict(self, sq_dict,fillin=False):
-        ''' Color sq_dict according to schedule '''
-        patchlist = []
-        for h in HEARTS:
-            idxoff = 0
-            for r,l in self.Pmeta[h]:
-                for idx in range(idxoff,idxoff+l):
-                    c = self.PRi[h][idx]
-                    # for dense matrix we suffer fill-in.
-                    if fillin and c not in sq_dict[r]:
-                        box = plt.Rectangle((c+1-.5,r+1-.5), 1, 1, fc=color_palette[h],ec='b',lw=1)
-                        patchlist.append(box)
-                    else:
-                        sq_dict[r][c].set_color(color_palette[h])
-                idxoff += l
-        if fillin:
-            return patchlist
-    
-    def isEmpty(self):
-        return sum(self.slen) == 0
-
-    def __str__(self):
-        a = ''
-        a += self.method+'\n'
-        if self.isEmpty():
-            return a+'  empty\n'
-        for h in HEARTS:
-            a += f"  H{h} sum{self.slen[h]} "
-            for (r,l) in self.Pmeta[h]:
-                a += f' r{r}: {l}  '
-            a += '\n'
-        return a
-
-    def strH(self,h):
-        if self.isEmpty():
-            return 'empty'
-        a = f"sum{self.slen[h]}  "
-        for (r,l) in self.Pmeta[h]:
-            a += f'  r{r}: {l}'
-        return a

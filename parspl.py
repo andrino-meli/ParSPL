@@ -10,13 +10,10 @@ from enum import Enum
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
 from data_format import color_palette
-from data_format import Collist, Tile, Fold, Empty
-from general import escape, HARTS, eprint, wprint, bprint, NameSpace
+from data_format import Collist, Tile, Diaginv, Empty
+from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint
+import general
 
-DEBUG = False
-def dprint(*args, **kwargs):
-    if DEBUG:
-        print(*args, file=sys.stderr, **kwargs)
 np.random.seed(0)
 
 def find_optimal_cuts(linsys,levels):
@@ -63,7 +60,6 @@ def tile_L(L,cuts):
             tile.insert(row,col,L.Lx[i])
     return tiles
 
-
 def assign_kernel_to_tile(tiles):
     print()
     bprint("Assigning Kernels to tiles:")
@@ -77,16 +73,13 @@ def assign_kernel_to_tile(tiles):
             tiles[i][i] = Empty(triag)
         elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
             print(f"DENSIFY: {triag}")
-            tiles[i][i] = Fold(triag)
-            tiles[i][i].check_numerical_stability()
+            tiles[i][i] = Diaginv(triag)
         elif triag.density() < 0.05:
             print(f"SPARSIFY: {triag}")
-            breakpoint()
             raise NotImplementedError()
         else:
             eprint(f'Triag "{triag}" is neither sparse nor dense ({triag.density()*100:.1f}%). Inflating memory by inverting. Consider subcutting it.')
-            tiles[i][i] = Fold(triag)
-            tiles[i][i].check_numerical_stability()
+            tiles[i][i] = Diaginv(triag)
             #raise NotImplementedError()
 
     # decide on kernel for the rest
@@ -166,34 +159,20 @@ def schedule_to_workers(tile_list):
     for synch_step, work in enumerate(tile_list):
         if len(work) > 1:
             raise NotImplementedError("Multiple tiles, so inter-kernel workload balancing, is unimplemented")
-        # distribute work while balancing load
         tile = work[0]
-        dist = [tile.empty_copy() for h in range(HARTS)] # each worker has a list of columns
-        load = np.zeros(HARTS)
-        if isinstance(tile,Collist):
-            # sort columns by length. The work is a Collist data structure.
-            # It has the structure: {col_num: (Li,Lx)}
-            sorted_cols = sorted(tile.items(), key=lambda item: len(item[1][0]),reverse=True)
-            # assign next longest column to least busy core.
-            for col,(Li,Lx) in sorted_cols:
-                least_busy_worker = np.argmin(load)
-                load[least_busy_worker] += len(Li) # TODO: have more complex performance function
-                dist[least_busy_worker][col] = (Li,Lx)
-        elif isinstance(tile,Fold):
-            dist = [tile for h in range(HARTS)]
-            # TODO: compute nnz()
-        else:
-            raise NotImplementedError("Kernel {tile.kernel} is to be implemented.")
+
+        # distribute work while balancing load
+        dist = tile.schedule()
+
         # purge dist from empty items:
         for i in range(len(dist)):
-            if dist[i].nnz() == 0:
+            if dist[i].assigned_data() == 0:
                 dist[i] = None
         schedule.append(tuple(dist))
     return schedule
 
 
-def print_schedule(schedule, concise=True):
-    # print schedule
+def print_schedule(schedule):
     print('\n########## SCHEDULING ##########')
     for synch,step in enumerate(schedule):
         print(f'synch. step {synch}:')
@@ -201,35 +180,19 @@ def print_schedule(schedule, concise=True):
             if work is None:
                 print(f'  H{hart} empty')
             else:
-                print(f'  H{hart} {work}: {work.nnz()} nonzeros')
-            #    if concise:
-            #        print(f'  H{hart} {work}: {work.nnz()} nonzeros')
-            #    else:
-            #        cols = ''
-            #        for col,(Li,Lx) in work.items():
-            #            cols += f'\t{col}={Li}{Lx}'
-            #        print(f'  H{hart} {work}:{cols}')
-            #if
-            #if isinstance(work,Collist):
-            #    if concise:
-            #        print(f'  H{hart} {work}: {work.nnz()} nonzeros')
-            #elif work is None:
-            #    print(f'  H{hart} empty')
+                print(f'  H{hart} {work}: {work.assigned_data()} elements')
         print()
 
-# Enumerate for specifing type of kernel used.
-class Kernel(Enum):
-    EMPTY = 0
-    FOLDED = 1 # dense, triag, parallel, no reduction
-    COLLIST = 2 # sparse, rect, parallel, reductions
-    #METAROW = 0
-    #CSCRECT = 0
-    #SPARSETRIAG = 1
-    #DENSETRIAG = 2
-    #SYNCHLESS_RECT = 3
-    #SCSEQ = 6
-    def __str__(self):
-        return self.name
+#class Kernel(Enum):
+#    EMPTY = 0
+#    FOLDED = 1 # dense, triag, parallel, no reduction
+#    COLLIST = 2 # sparse, rect, parallel, reductions
+#    #METAROW = 0
+#    #CSCRECT = 0
+#    #SPARSETRIAG = 1
+#    #DENSETRIAG = 2
+#    #SYNCHLESS_RECT = 3
+#    #SCSEQ = 6
 
 def genCodeFromSched(schedule,bp_sync):
     bprint("Generating Code Structures from Scheduled Data.")
@@ -308,12 +271,15 @@ def plot_schedule(L,schedule,cuts):
     ax.legend(handles=elems, loc='upper right')
 
     # Color according to schedule
+    patchlist = []
     for synch_num,work in enumerate(schedule):
         for h,tile in enumerate(work):
             if tile is None:
                 pass
             else:
-                tile.color_dict(sq_dict,color_palette[h])
+                patches = tile.color_dict(sq_dict,color_palette[h])
+                for p in patches:
+                    patchlist.append(ax.add_patch(p))
                 tile.show_on_plot(ax,number=synch_num)
     plt.show()
 
@@ -571,13 +537,15 @@ if __name__ == '__main__':
     filename = f'./src/{args.test}.json'
     cutfile = f'./src/{args.test}.cut'
     linsys = NameSpace.load_json(filename)
-    L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,'L from linsys.json')
+    L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,f'L from {filename}')
 
     #L = Triag(list(range(10),Li,Lx,n,name'debug dummy data matrix'
 
     #####  Do user requested exploration #####
+    DEBUG = False
     if args.debug:
         DEBUG = True
+        general.DEBUG = True
 
     if args.gray_plot:
         args.plot = True

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse, json, os, sys, time
-from scipy.sparse import csc_matrix
+import scipy.sparse as spa
 from enum import Enum
 import matplotlib 
 matplotlib.use('TkAgg')
@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import random
 
 from general import *
-from workspace_parser import WorkspaceParser
 
 MIN = 1
 MAX = 7
@@ -23,15 +22,18 @@ if __name__ == '__main__':
     # Argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument('name', type=str, help='Name of system.')
-    parser.add_argument('dim', type=int, help='Dimension of sparse linear system matrix.',)
+    parser.add_argument('dim', type=int, help='Dimension of sparse linear system matrix.', default=None)
+    parser.add_argument('--edit', action='store_true',
+        help='Edit an allready existing file.')
 
     args = parser.parse_args()
     name = args.name
     filename = f'./src/{name}.json'
-    dim = args.dim
     assert(len(name) > 1)
-    assert(not os.path.exists(filename))
-    assert(dim > 0)
+    if args.edit:
+        assert(os.path.exists(filename))
+    else:
+        assert(not os.path.exists(filename))
 
     # plotting
     fig, ax = plt.subplots()
@@ -42,7 +44,17 @@ if __name__ == '__main__':
 
     # thread communication and state variables
     doexit = False                # if set to True exit GUI mode
-    grid = np.zeros((dim,dim))     # matrix to generate
+    if not args.edit:
+        dim = args.dim
+        assert(dim > 0)
+        grid = np.zeros((dim,dim))     # matrix to generate
+        linsys = NameSpace()
+    else:
+        linsys = NameSpace.load_json(filename)
+        L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
+        grid = L.toarray()
+        dim = linsys.n
+
     state = State.NONE
 
     def press_handler(event):
@@ -103,12 +115,25 @@ if __name__ == '__main__':
     plt.close()
 
     # Save data
-    L = csc_matrix(grid)
-    linsys = NameSpace()
+    L = spa.csc_matrix(grid)
     linsys.n = dim
     linsys.Lp = L.indptr
     linsys.Li = L.indices
     linsys.Lx = L.data
+
+    # two elemenet Diagonal
+    linsys.D = 2*np.ones(dim)
+    #linsys.D = np.random.lognormal(1e3,1e3,dim)
+    #assert(not np.any(linsys.D == 0.0))
+
+    # compute K = LDLT
+    L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(dim,dim))
+    D = spa.diags(linsys.D,0)
+    K = L @ D @ L.transpose()
+    linsys.Kp = K.indptr
+    linsys.Ki = K.indices
+    linsys.Kx = K.data
+
     bprint(f'Dumping data to {filename}')
     linsys.dump_json(filename)
 
