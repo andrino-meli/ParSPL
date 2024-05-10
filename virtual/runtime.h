@@ -3,7 +3,6 @@
 #include <stdio.h>
 #define N_CCS 8
 #define VERBOSE
-//#define DMA_QUEUE_LEN 16
 
 extern pthread_barrier_t barr_all;
 

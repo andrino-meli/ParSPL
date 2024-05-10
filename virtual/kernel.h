@@ -27,3 +27,11 @@ void diaginv_ltsolve(
     uint16_t assigned_rows[],
     unsigned int num_rows // len(assigned_rows)
 );
+
+void diag_inv_mult(
+/* vector vector multiplication
+ *   bp[] = bp[]*Dinv[]
+ * TODO: use linalg files for this
+ */
+    int core_id
+);

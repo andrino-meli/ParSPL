@@ -63,7 +63,7 @@ def tile_L(L,cuts):
 
 def assign_kernel_to_tile(tiles):
     print()
-    bprint("Assigning Kernels to tiles:")
+    bprint("\nAssigning Kernels to tiles:")
     numcuts = len(tiles)
 
     # decide on kernel for diagonal tiles
@@ -203,7 +203,7 @@ def codegenSolver(problem,schedule,bp_sync):
         os.makedirs(direc)
     callfile = f'{direc}/parspl.c'
     datafile = f'{direc}/scheduled_data.h'
-    bprint(f'Dumping scheduled code to {callfile} and {datafile}.')
+    bprint(f'\nDumping scheduled code to {callfile} and {datafile}.')
     print(f"Synchronizing write access to bp at: {bp_sync}")
 
     # Gather funcalls and data
@@ -276,7 +276,35 @@ def codegenSolver(problem,schedule,bp_sync):
             f.write(f'\t\t\t// synch step {s}\n')
             f.write(f'\t\t\t{SYNCHRONIZE};\n')
         f.write(f'\t\t\tbreak;\n')
-        f.write('\t}\n}')
+        f.write('\t}\n}\n\n')
+
+        # create call to solve
+        f.write('void solve(int core_id){\n')
+        f.write('\t// lsolve\n')
+        f.write('\tlsolve(core_id);\n\n')
+        f.write(f'\t{SYNCHRONIZE};\n')
+
+        f.write('\t// multiply with Dinv\n')
+        f.write('\tdiag_inv_mult(core_id);\n\n')
+        f.write(f'\t{SYNCHRONIZE};\n')
+
+        f.write('\t// ltsolve\n')
+        f.write('\tltsolve(core_id);\n\n')
+        f.write(f'\t{SYNCHRONIZE};\n')
+        #f.write('\tswitch (core_id){\n')
+        #for h in range(HARTS):
+        #    f.write(f'\t\tcase {h}:\n')
+        #            f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
+        #            f.write(f'\t\t\t{fun};\n')
+        #            f.write(f'\t\t\t{SYNCHRONIZE};\n')
+        #    f.write(f'\t\t\tbreak;\n')
+        #f.write(f'\t\tdefault:\n')
+        #f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        #for s in range(synchsteps):
+        #    f.write(f'\t\t\t// synch step {s}\n')
+        #    f.write(f'\t\t\t{SYNCHRONIZE};\n')
+        #f.write(f'\t\t\tbreak;\n')
+        f.write('}\n\n')
 
     # dump data fo file
     with open(datafile,'w') as f:
@@ -290,14 +318,15 @@ def codegenSolver(problem,schedule,bp_sync):
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
 
 
-def writeWorkspaceToFile(problem,linsys,case='lsolve'):
+def writeWorkspaceToFile(problem,linsys,case='lsolve',debug=False):
     direc = f'./build/{problem}'
     if not os.path.exists(direc):
         os.makedirs(direc)
     workh = f'{direc}/workspace.h'
     workc = f'{direc}/workspace.c'
     goldenh = f'{direc}/golden.h'
-    bprint(f'Creating workspace {workh} and {workc}.')
+    bprint(f'\nCreating workspace')
+    print(f'Dumping to {workh} and {workc}.\nIncluding golden model for **{case}**')
 
     try:
         fh = open(workh,'w')
@@ -310,13 +339,21 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve'):
 
         # create golden model: M @ x_golden = bp
         ## randomly sample from 1e-{RANGE} to 1e{RANGE}
-        RANGE = 5
-        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
-        x_gold = np.exp(exponent)
+        if debug:
+            x_gold = np.ones(linsys.n)
+        else:
+            RANGE = 5
+            exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+            x_gold = np.exp(exponent)
         # Determine M matrix depending on the verification case
         if case == 'solve':
-            M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
-            raise NotImplementedError()
+            # TODO: use K directly to avoid any conversion errors
+            # but since we still have LDLT as input data
+            # and do not do the decomposition ourself it is safer to do this instead
+            #M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
+            L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
+            L += spa.eye(linsys.n)
+            M = L @ spa.diags(linsys.D) @ L.transpose()
         elif case == 'ltsolve':
             M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
             M = M.transpose()
@@ -326,16 +363,24 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve'):
             M += spa.eye(linsys.n)
         else:
             raise NotImplementedError(f'Case {case} unknown')
+
+        if debug and linsys.n < 20:
+            print('Matrix for golden model creation:')
+            print(M.toarray())
+
         # bp
         bp = M @ x_gold
 
-        # bp_copy
+        # bp, bp_copy
         bp_cp = np.zeros(linsys.n)
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
         fc.write(f'// verification of {case}\n')
         ndarrayToCH(fc,fh,'bp',bp)
+        # golden
         ndarrayToCH(fc,fh,'XGOLD',x_gold)
         ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
+        # Dinv
+        ndarrayToCH(fc,fh,'Dinv',1/np.array(linsys.D))
     finally:
         fh.close()
         fc.close()
@@ -722,7 +767,7 @@ if __name__ == '__main__':
         linsys.Lx = Lx
 
     if args.level:
-        bprint("Computing (dependency) levels of L matrix:")
+        bprint("\nComputing (dependency) levels of L matrix:")
         levels,bins = compute_level(linsys)
         # bin levels and print bins as well as there size.
         bprint(' Level\t Columns:')
@@ -734,10 +779,10 @@ if __name__ == '__main__':
 
     if args.level_schedule or args.level_thr is not None:
         if args.level_thr is not None:
-            bprint(f"Level schedule only levels up to {args.level_thr}:")
+            bprint(f"\nLevel schedule only levels up to {args.level_thr}:")
             PL,perm = incomplete_level_schedule(linsys,args.level_thr, intra_level_reorder=args.intra_level_reorder)
         else:
-            bprint("Level schedule and permute L matrix:")
+            bprint("\nLevel schedule and permute L matrix:")
             PL,perm = level_schedule(linsys)
             dprint('  perm=\n',perm)
         wprint('Setting L to PL temporarilly. Do not use this in production!')
@@ -750,7 +795,7 @@ if __name__ == '__main__':
         else:
             print(f'Cut File {cutfile} exists. Overwriting.')
             cuts = read_cuts(args.test)
-            bprint(f'Orriginally cutting at: ',end='')
+            bprint(f'\nOrriginally cutting at: ',end='')
             print(*cuts)
         # suggesting cuts:
         cuts = [0]
@@ -761,7 +806,7 @@ if __name__ == '__main__':
                 cuts.append(cuts[-1] + bins[l])
         cuts.append(L.n)
         # printing and dumping cuts
-        bprint(f'Suggesting to cut at: ',end='')
+        bprint(f'\nSuggesting to cut at: ',end='')
         print(*cuts)
         fd = open(cutfile,'w')
         for c in cuts:
@@ -769,7 +814,7 @@ if __name__ == '__main__':
         fd.close()
 
     if args.occupation:
-        bprint('Calculate row and column occupation:')
+        bprint('\nCalculate row and column occupation:')
         (row_occ,col_occ) = row_col_occupation(wp.L)
         for vec,name in zip([row_occ,col_occ],['row','col']):
             bprint(f' {name}\t occupation:',end=None)
@@ -792,13 +837,13 @@ if __name__ == '__main__':
 
     if args.schedule or args.codegen:
         cuts = read_cuts(args.test)
-        bprint(f'Cutting at: ',end='')
+        bprint(f'\nCutting at: ',end='')
         print(*cuts)
         print("L matrix to cut & schedule:", L)
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
         tile_list = optimize_tiles(tiles) #unstructure tiles
-        bprint(f'Scheduling to {len(tile_list)} tiling steps.')
+        bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
         schedule = schedule_to_workers(tile_list)
         if args.schedule:
             print_schedule(schedule)
@@ -820,15 +865,15 @@ if __name__ == '__main__':
             case = 'ltsolve'
         elif args.solve:
             case = 'solve'
-        writeWorkspaceToFile(args.test,linsys,case=case)
+        writeWorkspaceToFile(args.test,linsys,case=case,debug=args.debug)
 
     # Dump files
     if args.dumpbuild:
-        bprint("Dumping files:\n\n")
+        bprint("\nDumping files:\n\n")
         subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
 
     if args.link:
-        bprint('Linking generated code to virtual verification environment')
+        bprint('\nLinking generated code to virtual verification environment')
         links = [f'ln -sf ../build/{args.test}/parspl.c virtual/parspl.c',
                  f'ln -sf ../build/{args.test}/scheduled_data.h virtual/scheduled_data.h',
                  f'ln -sf ../build/{args.test}/workspace.c virtual/workspace.c',

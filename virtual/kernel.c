@@ -2,6 +2,21 @@
 #include "kernel.h"
 #include "runtime.h"
 
+
+#ifdef VERBOSE
+void print_bp(int core_id){
+    if(core_id == 0){
+        printf("bp = [");
+    }
+}
+#endif
+
+void diag_inv_mult(int core_id) {
+    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+        bp[i] *= Dinv[i];
+    }
+}
+
 void diaginv_lsolve(
     unsigned int n,
     unsigned int rowa, // row/column offset

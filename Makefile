@@ -8,6 +8,10 @@ TEST ?= dummy_fullydense
 
 all: link
 
+list:
+	# Available tests for linear systems:
+	ls src/*.json
+
 codegen:
 	# Generating code for $(TEST)
 	./parspl.py --test $(TEST) --codegen --link

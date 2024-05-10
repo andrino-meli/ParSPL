@@ -129,6 +129,7 @@ if __name__ == '__main__':
 
     # compute K = LDLT
     L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(dim,dim))
+    L = L + spa.eye(linsys.n)
     D = spa.diags(linsys.D,0)
     K = L @ D @ L.transpose()
     linsys.Kp = K.indptr
