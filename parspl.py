@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import numpy as np
-import argparse, os, json, sys
+import argparse, os, json, sys, subprocess
 from scipy.sparse import csc_matrix
 import scipy.sparse as spa
 import matplotlib.pyplot as plt
@@ -9,12 +9,13 @@ from enum import Enum
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
-from data_format import color_palette
 from data_format import Collist, Tile, Diaginv, Empty
-from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint
+from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint, color_palette, DEBUG, ndarrayToCH
 import general
 
 np.random.seed(0)
+CAT_CMD = 'bat'
+DEBUG = False
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -70,7 +71,7 @@ def assign_kernel_to_tile(tiles):
         triag = tiles[i][i]
         assert(isinstance(triag,Tile))
         if triag.nnz() == 0:
-            tiles[i][i] = Empty(triag)
+            tiles[i][i] = Empty(0,0,0,0)
         elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
             print(f"DENSIFY: {triag}")
             tiles[i][i] = Diaginv(triag)
@@ -92,8 +93,7 @@ def assign_kernel_to_tile(tiles):
         # DEBUG print tiles
         for til in tiles:
             for t in til:
-                if t is not None:
-                    print(t)
+                print(f'{t}: {t.nnz()} nnz')
 
 def optimize_tiles(tiles):
     ''' Optimize and Merge tiles.
@@ -167,7 +167,7 @@ def schedule_to_workers(tile_list):
         # purge dist from empty items:
         for i in range(len(dist)):
             if dist[i].assigned_data() == 0:
-                dist[i] = None
+                dist[i] = Empty(0,0,0,0)
         schedule.append(tuple(dist))
     return schedule
 
@@ -177,28 +177,128 @@ def print_schedule(schedule):
     for synch,step in enumerate(schedule):
         print(f'synch. step {synch}:')
         for hart,work in enumerate(step):
-            if work is None:
+            if isinstance(work,Empty):
                 print(f'  H{hart} empty')
             else:
-                print(f'  H{hart} {work}: {work.assigned_data()} elements')
+                print(f'  H{hart} {work}:\t {work.assigned_data()} assigned elements')
         print()
 
-#class Kernel(Enum):
-#    EMPTY = 0
-#    FOLDED = 1 # dense, triag, parallel, no reduction
-#    COLLIST = 2 # sparse, rect, parallel, reductions
-#    #METAROW = 0
-#    #CSCRECT = 0
-#    #SPARSETRIAG = 1
-#    #DENSETRIAG = 2
-#    #SYNCHLESS_RECT = 3
-#    #SCSEQ = 6
 
 def genCodeFromSched(schedule,bp_sync):
     bprint("Generating Code Structures from Scheduled Data.")
     print(f"Synchronizing write access to bp at: {bp_sync}")
-    breakpoint()
-    return codedata
+    funcalls = [[] for i in range(HARTS)]
+    codedata = {}
+    for s,dist in enumerate(schedule):
+        assert(len(dist) == HARTS)
+        for h,d in enumerate(dist):
+            solve,dat = d.codegen(s,h)
+            funcalls[h].append(solve)
+            for k,v in dat.items():
+                assert(k[0:2] == f's{s}')
+                if k in codedata:
+                    dprint(f'Discarding {k} for s{s}h{h}: duplicate')
+                else:
+                    codedata[k] = v
+            codedata.update(dat)
+    return (funcalls,codedata)
+
+
+def writeCodeToFile(problem,funcalls,codedata):
+    SYNCHRONIZE = '__rt_barrier()'
+    synchsteps = len(funcalls[0])
+    direc = f'./build/{problem}'
+    if not os.path.exists(direc):
+        os.makedirs(direc)
+    callfile = f'{direc}/parspl.c'
+    datafile = f'{direc}/scheduled_data.h'
+    bprint(f'Dumping scheduled code to {callfile} and {datafile}.')
+
+    # Create Call file for Lsolve
+    with open(callfile,'w') as f:
+        f.write('#include <stdio.h>\n')
+        f.write('#include "runtime.h"\n')
+        f.write('#include "kernel.h"\n')
+        f.write('#include "scheduled_data.h"\n\n')
+        f.write('void lsolve(int core_id){\n')
+        f.write('\tswitch (core_id){\n')
+        for h in range(HARTS):
+            f.write(f'\t\tcase {h}:\n')
+            for s,(fun,_) in zip(range(synchsteps),funcalls[h]):
+                f.write(f'\t\t\t// synch step {s}\n')
+                f.write(f'\t\t\t{fun};\n')
+                f.write(f'\t\t\t{SYNCHRONIZE};\n')
+            f.write(f'\t\t\tbreak;\n')
+        f.write(f'\t\tdefault:\n')
+        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        for s in range(synchsteps):
+            f.write(f'\t\t\t// synch step {s}\n')
+            f.write(f'\t\t\t{SYNCHRONIZE};\n')
+        f.write(f'\t\t\tbreak;\n')
+        f.write('\t}\n}')
+    
+    # Create Call file for Ltsolve
+    # TODO!
+
+    with open(datafile,'w') as f:
+        #f.write('#include "runtime.h"\n\n')
+        for k,v in codedata.items():
+            if isinstance(v,list):
+                v = general.list2array(v,k)
+            if isinstance(v,np.ndarray):
+                general.ndarrayToC(f,k,v)
+            else:
+                raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
+
+
+def writeWorkspaceToFile(problem,linsys,case='lsolve'):
+    direc = f'./build/{problem}'
+    if not os.path.exists(direc):
+        os.makedirs(direc)
+    workh = f'{direc}/workspace.h'
+    workc = f'{direc}/workspace.c'
+    goldenh = f'{direc}/golden.h'
+    bprint(f'Creating workspace {workh} and {workc}.')
+
+    try:
+        fh = open(workh,'w')
+        fc = open(workc,'w')
+
+        # includes and defines
+        fc.write('#include "workspace.h"\n\n')
+        fh.write(f'#define {case.upper()}\n')
+        fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
+
+        # create golden model: M @ x_golden = bp
+        ## randomly sample from 1e-{RANGE} to 1e{RANGE}
+        RANGE = 5
+        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        x_gold = np.exp(exponent)
+        # Determine M matrix depending on the verification case
+        if case == 'ldlsolve':
+            M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
+            raise NotImplementedError()
+        elif case == 'ltsolve':
+            M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
+            M.transpose()
+            M += spa.eye(linsys.n)
+            raise NotImplementedError()
+        elif case == 'lsolve':
+            M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
+            M += spa.eye(linsys.n)
+        # bp
+        bp = M @ x_gold
+
+        # bp_copy
+        bp_cp = np.zeros(linsys.n)
+        ndarrayToCH(fc,fh,'bp_cp',bp_cp)
+        fc.write(f'// verification of {case}\n')
+        ndarrayToCH(fc,fh,'bp',bp)
+        ndarrayToCH(fc,fh,'XGOLD',x_gold)
+        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
+    finally:
+        fh.close()
+        fc.close()
 
 def interactive_plot_schedule(L,schedule,cuts):
     (fig,ax,sq_dict) = L.plot(uselx=False)
@@ -532,6 +632,8 @@ if __name__ == '__main__':
         help='Debug print a lot of information. Use on small matrices.')
     parser.add_argument('--invert', action='store_true',
         help='Invert L matrix')
+    parser.add_argument('--dumpbuild', action='store_true',
+        help='Dump files in directory of problem to shell.')
 
     args = parser.parse_args()
     filename = f'./src/{args.test}.json'
@@ -542,7 +644,6 @@ if __name__ == '__main__':
     #L = Triag(list(range(10),Li,Lx,n,name'debug dummy data matrix'
 
     #####  Do user requested exploration #####
-    DEBUG = False
     if args.debug:
         DEBUG = True
         general.DEBUG = True
@@ -649,9 +750,10 @@ if __name__ == '__main__':
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
         tile_list = optimize_tiles(tiles) #unstructure tiles
-        print(f'Scheduled to {len(tile_list)} synchronization steps.')
+        bprint(f'Scheduling to {len(tile_list)} synchronization steps.')
         schedule = schedule_to_workers(tile_list)
-        print_schedule(schedule)
+        if args.schedule:
+            print_schedule(schedule)
         if args.interactive_schedule:
             interactive_plot_schedule(L,schedule,cuts)
         elif args.plot:
@@ -663,4 +765,13 @@ if __name__ == '__main__':
 
     if args.codegen:
         codedata = genCodeFromSched(schedule,cuts)
-        print(codedata)
+        writeCodeToFile(args.test,*codedata)
+        writeWorkspaceToFile(args.test,linsys)
+
+    # Dump files
+    if args.dumpbuild:
+        bprint("Dumping files:\n\n")
+        subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
+
+    if DEBUG:
+        breakpoint()

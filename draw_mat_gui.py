@@ -9,6 +9,7 @@ import random
 
 from general import *
 
+np.random.seed(0)
 MIN = 1
 MAX = 7
 DIV = 10

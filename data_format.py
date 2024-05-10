@@ -4,26 +4,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import matplotlib
 import math
-from general import svdinvert, wprint, DEBUG, eprint, HARTS,dprint
+from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette
 from bfloat16 import bfloat16
 
-# select if want to plot L**-1
-NUM_CORES = 8
-
-#color_palette = [(0xfc,0xda,0x8f), (0x28,0xc1,0xbc), (0x06,0x67,0xdd), (0x94,0xc1,0xe0), (0x88,0xd6,0x2f), (0xf4,0x70,0xbf), (0xdd,0x6c,0x58), (0x18,0x9b,0x42), (0x0e,0x8c,0x73)]
-#color_palette = [(0x71,0x56,0x60), (0x84,0x64,0x70), (0x56,0x60,0x71), (0x72,0x7f,0x96), (0xc3,0x9f,0x72), (0xd5,0xbf,0x95), (0x66,0x77,0x62), (0x87,0x9e,0x82)]
-color_palette = [
-        (0x1e,0x4a,0x28),
-        (0x51,0xa1,0x6a),
-        (0x77,0xab,0x75),
-        (0x9c,0xb5,0x7f),
-        (0xe6,0xc9,0x94),
-        (0xcc,0x7a,0x3d),
-        (0xc8,0x67,0x39),
-        (0xc4,0x53,0x35),
-        ]
-color_palette = [(r/255,g/255,b/255) for (r,g,b) in color_palette]
-color_palette.reverse()
 
 class Tile:
     ''' Abstract class to contain a tile. Inherit this by a tile class that is also a cointainer for data.'''
@@ -116,8 +99,6 @@ class Collist(Tile,dict):
             raise NotImplementedError(f'Trying to merge {type(self)} with {type(other)}')
         # TODO: assert we are directly below each other:
         #       currently we assume the merging is done correctly according to a dep. tree.
-        #if:
-        #else:
         #    raise ValueError(f'{self} and {other} must be in line')
         self.rowa = min(self.rowa,other.rowa)
         self.cola = min(self.cola,other.cola)
@@ -157,12 +138,19 @@ class Collist(Tile,dict):
         return dist
 
 class Empty(Tile):
-    def __init__(self,collist):
-        assert(isinstance(collist,Collist))
-        self.rowa = collist.rowa
-        self.rowz = collist.rowz
-        self.cola = collist.cola
-        self.colz = collist.colz
+
+    def schedule(self,num_cores=HARTS):
+        dist = [Empty() for h in range(num_cores)]
+        return dist
+
+    def codegen(self,s,h):
+        return (('// empty', '// empty'),{})
+
+    def color_dict(self,sq_dict,color):
+        return []
+
+    def show_on_plot(self,ax,number=None):
+        return []
 
     def nnz(self):
         return 0
@@ -194,8 +182,8 @@ class Diaginv(Tile):
             self.dense_triag = np.eye(self.n)
             for col,(Li,Lx) in collist.items():
                 for i,x in zip(Li,Lx):
-                    r,c = col-self.offset, i - self.offset
-                    assert(r < c)
+                    c,r = col-self.offset, i - self.offset
+                    assert(c < r)
                     self.dense_triag[r][c] = x
 
             # invert
@@ -204,7 +192,7 @@ class Diaginv(Tile):
             self.check_numerical_stability()
 
     def empty_copy(self):
-        tmp = Diaginv(self.rowa,self.rowz,self.cola,self.colz,empty=True)
+        tmp = Diaginv(Collist(self.rowa,self.rowz,self.cola,self.colz),empty=True)
         # copy pointers to data
         tmp.dense_triag = self.dense_triag
         tmp.dense_inverse = self.dense_inverse
@@ -244,10 +232,6 @@ class Diaginv(Tile):
     def nnz(self):
         return np.count_nonzero(self.dense_triag) - self.n
 
-    def empty_copy(self):
-        tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
-        return Diaginv(tmp,empty=True)
-
     def color_dict(self, sq_dict, color):
         patches = []
         for ri in self.assigned_rows:
@@ -276,6 +260,17 @@ class Diaginv(Tile):
         dprint()
         return dist
 
+    def codegen(self,s,h):
+        assrow = f's{s}h{h}_assigned_rows'
+        mat = f's{s}_diaginv'
+
+        lsolve = f'diaginv_lsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
+        ltsolve = f'diaginv_ltsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
+        dat = {}
+        dat[assrow] = np.array(self.assigned_rows,dtype=np.uint16)
+        dat[mat] = self.dense_inverse
+        return (lsolve,ltsolve),dat
+
 class Fold(Diaginv,Tile):
     def empty_copy(self):
         raise NotImplementedError()
@@ -292,7 +287,7 @@ class Fold(Diaginv,Tile):
             meta.append((row+self.column_offset,len(val),ri,val))
         meta = sorted(meta,key=lambda x: x[1],reverse=True)
         # schedule rows onto Hearts in parallel
-        hearts = [i for i in range(NUM_CORES)]
+        hearts = [i for i in range(HARTS)]
         # schedule greedely longest operations first to least busy heart
         slen = [0 for h in hearts]
         Pmeta = [[] for heart in hearts]

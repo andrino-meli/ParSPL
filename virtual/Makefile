@@ -1,19 +1,27 @@
-CC 		?= gcc
-CFLAGS 	?= -lpthread -std=gnu99 -I./
-VIRT_RT ?= virt_runtime.h
+CFLAGS 	?= -std=gnu99 -Wall
+VIRT_RT ?= runtime.h
+OBJ = build/workspace.o build/parspl.o build/smain.o build/kernel.o build/virtual_main.o
 
-.PHONY: clean_virt all_virt
+.PHONY: clean all
+
+all: run
 
 clean:
-	rm -rf bin
+	rm -rf build
 
-bin:
+build:
 	mkdir -p $@
 
-bin/sla_%: libsla/%.c $(VIRT_RT) | bin
-	$(CC) $(CFLAGS) $< -o $@
+virtual:
+	echo TODO
 
-link
+build/%.o: %.c $(VIRT_RT) | build
+	gcc $(CFLAGS) -g -c $< -o $@
 
-all: bin/sla_cluster_sdmv
-all: bin/sla_cluster_csrmv
+build/virtual_main: $(OBJ)
+	#prerequisites: $?
+	#output: $@
+	gcc $(CFLAGS) -lpthread $^ -o $@
+
+run: build/virtual_main
+	./build/virtual_main
