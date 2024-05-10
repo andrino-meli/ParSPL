@@ -27,7 +27,15 @@
 
 int verify() {
     #ifdef VERBOSE
-    printf("VERIFICATION:\n");
+        #ifdef LSOLVE
+        printf("VERIFICATION of lsolve:\n");
+        #endif
+        #ifdef LTSOLVE
+        printf("VERIFICATION of ltsolve:\n");
+        #endif
+        #ifdef SOLVE
+        printf("VERIFICATION of ldlsolve:\n");
+        #endif
     #endif
     double maxerr = 0;
     double maxrelerr = 0;
@@ -55,6 +63,8 @@ int verify() {
     #endif
     return (int)(maxrelerr*TOL);
 }
+
+
 
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.

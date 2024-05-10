@@ -4,16 +4,13 @@ OBJ = build/workspace.o build/parspl.o build/smain.o build/kernel.o build/virtua
 
 .PHONY: clean all
 
-all: run
+all: clean run
 
 clean:
 	rm -rf build
 
 build:
 	mkdir -p $@
-
-virtual:
-	echo TODO
 
 build/%.o: %.c $(VIRT_RT) | build
 	gcc $(CFLAGS) -g -c $< -o $@

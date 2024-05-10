@@ -226,12 +226,13 @@ def codegenSolver(problem,schedule,bp_sync):
             funcalls[h].append(solve)
     SYNCHRONIZE = '__rt_barrier()'
 
-    # create call file for lsolve
     with open(callfile,'w') as f:
         f.write('#include <stdio.h>\n')
         f.write('#include "runtime.h"\n')
         f.write('#include "kernel.h"\n')
         f.write('#include "scheduled_data.h"\n\n')
+
+        # create call to lsolve
         f.write('void lsolve(int core_id){\n')
         f.write('\tswitch (core_id){\n')
         for h in range(HARTS):
@@ -252,10 +253,30 @@ def codegenSolver(problem,schedule,bp_sync):
             f.write(f'\t\t\t// synch step {s}\n')
             f.write(f'\t\t\t{SYNCHRONIZE};\n')
         f.write(f'\t\t\tbreak;\n')
+        f.write('\t}\n}\n\n')
+
+        # create call to ltsolve
+        f.write('void ltsolve(int core_id){\n')
+        f.write('\tswitch (core_id){\n')
+        for h in range(HARTS):
+            f.write(f'\t\tcase {h}:\n')
+            for s,(_,fun) in zip(reversed(range(synchsteps)),reversed(funcalls[h])):
+                d = schedule[s][h]
+                synchs = [str(i) for i in range(s,s+d.snum_fe()+1)]
+                if not isinstance(d,SynchBuffer):
+                    f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
+                    f.write(f'\t\t\t{fun};\n')
+                    f.write(f'\t\t\t{SYNCHRONIZE};\n')
+                #else:
+                #    f.write(f'\t\t\t{fun};\n')
+            f.write(f'\t\t\tbreak;\n')
+        f.write(f'\t\tdefault:\n')
+        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        for s in range(synchsteps):
+            f.write(f'\t\t\t// synch step {s}\n')
+            f.write(f'\t\t\t{SYNCHRONIZE};\n')
+        f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}')
-    
-    # create call file for ltsolve
-    # TODO!
 
     # dump data fo file
     with open(datafile,'w') as f:
@@ -293,17 +314,18 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve'):
         exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
         x_gold = np.exp(exponent)
         # Determine M matrix depending on the verification case
-        if case == 'ldlsolve':
+        if case == 'solve':
             M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
             raise NotImplementedError()
         elif case == 'ltsolve':
             M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
-            M.transpose()
+            M = M.transpose()
             M += spa.eye(linsys.n)
-            raise NotImplementedError()
         elif case == 'lsolve':
             M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
             M += spa.eye(linsys.n)
+        else:
+            raise NotImplementedError(f'Case {case} unknown')
         # bp
         bp = M @ x_gold
 
@@ -652,6 +674,14 @@ if __name__ == '__main__':
         help='Invert L matrix')
     parser.add_argument('--dumpbuild', action='store_true',
         help='Dump files in directory of problem to shell.')
+    parser.add_argument('--lsolve', action='store_true',
+        help='Verify lsolve. Put golden model into workspace.')
+    parser.add_argument('--ltsolve', action='store_true',
+        help='Verify ltsolve. Put golden model into workspace.')
+    parser.add_argument('--solve', action='store_true',
+        help='Verify ldlsolve. Put golden model into workspace.')
+    parser.add_argument('--link', action='store_true',
+        help='Link generated code to virtual verification environment.')
 
     args = parser.parse_args()
     filename = f'./src/{args.test}.json'
@@ -783,12 +813,28 @@ if __name__ == '__main__':
 
     if args.codegen:
         codegenSolver(args.test,schedule,cuts)
-        writeWorkspaceToFile(args.test,linsys)
+        case = 'lsolve'
+        if args.lsolve:
+            case = 'lsolve'
+        elif args.ltsolve:
+            case = 'ltsolve'
+        elif args.solve:
+            case = 'solve'
+        writeWorkspaceToFile(args.test,linsys,case=case)
 
     # Dump files
     if args.dumpbuild:
         bprint("Dumping files:\n\n")
         subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
+
+    if args.link:
+        bprint('Linking generated code to virtual verification environment')
+        links = [f'ln -sf ../build/{args.test}/parspl.c virtual/parspl.c',
+                 f'ln -sf ../build/{args.test}/scheduled_data.h virtual/scheduled_data.h',
+                 f'ln -sf ../build/{args.test}/workspace.c virtual/workspace.c',
+                 f'ln -sf ../build/{args.test}/workspace.h virtual/workspace.h' ]
+        for l in links:
+            subprocess.run(l,shell=True)
 
     if DEBUG:
         breakpoint()

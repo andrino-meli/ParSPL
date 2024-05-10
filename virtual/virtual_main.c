@@ -38,7 +38,7 @@ int main() {
     }
     // print return values:
     for (int i=0; i<N_CCS; ++i) {
-        printf("Thread %d retunred %d\n",i,cc_params[i].ret);
+        printf("Thread %d returned %d\n",i,cc_params[i].ret);
     }
     return 0;
 }
