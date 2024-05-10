@@ -23,9 +23,12 @@
 #include "parspl.h"   // for lsolve, ltsolve, solve functions
 #include "workspace.h" // for access to bp
 
-#define TOL (1e5)
+#define TOL (1e2) // require the error to be less than 1%
 
 int verify() {
+    #ifdef VERBOSE
+    printf("VERIFICATION:\n");
+    #endif
     double maxerr = 0;
     double maxrelerr = 0;
 
@@ -38,7 +41,7 @@ int verify() {
         double relerr = err*XGOLD_INV[i];
         double absrel = ( relerr >= 0 ) ? relerr : -relerr;
         #ifdef VERBOSE
-        printf("row %d, err %e, absrel %e\n", i, err, absrel);
+        printf("row %d:\t\tgold %.3e, bp %.3e,\terr %.3e,\tabsrel %.3f%%\n", i, XGOLD[i], bp[i], err, absrel*100);
         #endif
         if (maxrelerr < absrel) {
             maxrelerr = absrel;
@@ -68,6 +71,6 @@ int smain(uint32_t core_id, uint32_t core_num) {
     if (core_id == 0) {
         return verify();
     }
-    // all other cores return 42
-    return 42;
+    // all other cores return 4242
+    return 4242;
 }

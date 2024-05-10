@@ -9,7 +9,7 @@ from enum import Enum
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
-from data_format import Collist, Tile, Diaginv, Empty
+from data_format import Collist, Tile, DiagInv, Empty, SynchBuffer
 from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint, color_palette, DEBUG, ndarrayToCH
 import general
 
@@ -74,13 +74,13 @@ def assign_kernel_to_tile(tiles):
             tiles[i][i] = Empty(0,0,0,0)
         elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
             print(f"DENSIFY: {triag}")
-            tiles[i][i] = Diaginv(triag)
+            tiles[i][i] = DiagInv(triag)
         elif triag.density() < 0.05:
             print(f"SPARSIFY: {triag}")
             raise NotImplementedError()
         else:
             eprint(f'Triag "{triag}" is neither sparse nor dense ({triag.density()*100:.1f}%). Inflating memory by inverting. Consider subcutting it.')
-            tiles[i][i] = Diaginv(triag)
+            tiles[i][i] = DiagInv(triag)
             #raise NotImplementedError()
 
     # decide on kernel for the rest
@@ -156,7 +156,7 @@ def schedule_to_workers(tile_list):
     '''
 
     schedule = []
-    for synch_step, work in enumerate(tile_list):
+    for work in tile_list:
         if len(work) > 1:
             raise NotImplementedError("Multiple tiles, so inter-kernel workload balancing, is unimplemented")
         tile = work[0]
@@ -169,6 +169,18 @@ def schedule_to_workers(tile_list):
             if dist[i].assigned_data() == 0:
                 dist[i] = Empty(0,0,0,0)
         schedule.append(tuple(dist))
+
+        # add dummy synch steps if some kernels synch interanlly as well
+        dprint(dist)
+        maxsnum = max([d.snum_fe() for d in dist])
+        for i in range(maxsnum):
+            buffer_dist = []
+            for h in range(HARTS):
+                if dist[h].snum_fe() > i:
+                    buffer_dist.append(SynchBuffer(0,0,0,0))
+                else:
+                    buffer_dist.append(Empty(0,0,0,0))
+            schedule.append(tuple(buffer_dist))
     return schedule
 
 
@@ -177,23 +189,32 @@ def print_schedule(schedule):
     for synch,step in enumerate(schedule):
         print(f'synch. step {synch}:')
         for hart,work in enumerate(step):
-            if isinstance(work,Empty):
-                print(f'  H{hart} empty')
+            if work.assigned_data() == 0:
+                print(f'  H{hart} {work}: ')
             else:
                 print(f'  H{hart} {work}:\t {work.assigned_data()} assigned elements')
         print()
 
 
-def genCodeFromSched(schedule,bp_sync):
-    bprint("Generating Code Structures from Scheduled Data.")
+def codegenSolver(problem,schedule,bp_sync):
+    synchsteps = len(schedule)
+    direc = f'./build/{problem}'
+    if not os.path.exists(direc):
+        os.makedirs(direc)
+    callfile = f'{direc}/parspl.c'
+    datafile = f'{direc}/scheduled_data.h'
+    bprint(f'Dumping scheduled code to {callfile} and {datafile}.')
     print(f"Synchronizing write access to bp at: {bp_sync}")
+
+    # Gather funcalls and data
     funcalls = [[] for i in range(HARTS)]
     codedata = {}
     for s,dist in enumerate(schedule):
         assert(len(dist) == HARTS)
         for h,d in enumerate(dist):
+            # call tiles codegen
             solve,dat = d.codegen(s,h)
-            funcalls[h].append(solve)
+            # process data
             for k,v in dat.items():
                 assert(k[0:2] == f's{s}')
                 if k in codedata:
@@ -201,20 +222,11 @@ def genCodeFromSched(schedule,bp_sync):
                 else:
                     codedata[k] = v
             codedata.update(dat)
-    return (funcalls,codedata)
-
-
-def writeCodeToFile(problem,funcalls,codedata):
+            # process function call
+            funcalls[h].append(solve)
     SYNCHRONIZE = '__rt_barrier()'
-    synchsteps = len(funcalls[0])
-    direc = f'./build/{problem}'
-    if not os.path.exists(direc):
-        os.makedirs(direc)
-    callfile = f'{direc}/parspl.c'
-    datafile = f'{direc}/scheduled_data.h'
-    bprint(f'Dumping scheduled code to {callfile} and {datafile}.')
 
-    # Create Call file for Lsolve
+    # create call file for lsolve
     with open(callfile,'w') as f:
         f.write('#include <stdio.h>\n')
         f.write('#include "runtime.h"\n')
@@ -225,9 +237,14 @@ def writeCodeToFile(problem,funcalls,codedata):
         for h in range(HARTS):
             f.write(f'\t\tcase {h}:\n')
             for s,(fun,_) in zip(range(synchsteps),funcalls[h]):
-                f.write(f'\t\t\t// synch step {s}\n')
-                f.write(f'\t\t\t{fun};\n')
-                f.write(f'\t\t\t{SYNCHRONIZE};\n')
+                d = schedule[s][h]
+                synchs = [str(i) for i in range(s,s+d.snum_fe()+1)]
+                if not isinstance(d,SynchBuffer):
+                    f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
+                    f.write(f'\t\t\t{fun};\n')
+                    f.write(f'\t\t\t{SYNCHRONIZE};\n')
+                #else:
+                #    f.write(f'\t\t\t{fun};\n')
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
         f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
@@ -237,9 +254,10 @@ def writeCodeToFile(problem,funcalls,codedata):
         f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}')
     
-    # Create Call file for Ltsolve
+    # create call file for ltsolve
     # TODO!
 
+    # dump data fo file
     with open(datafile,'w') as f:
         #f.write('#include "runtime.h"\n\n')
         for k,v in codedata.items():
@@ -750,7 +768,7 @@ if __name__ == '__main__':
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
         tile_list = optimize_tiles(tiles) #unstructure tiles
-        bprint(f'Scheduling to {len(tile_list)} synchronization steps.')
+        bprint(f'Scheduling to {len(tile_list)} tiling steps.')
         schedule = schedule_to_workers(tile_list)
         if args.schedule:
             print_schedule(schedule)
@@ -764,8 +782,7 @@ if __name__ == '__main__':
        plt.show()
 
     if args.codegen:
-        codedata = genCodeFromSched(schedule,cuts)
-        writeCodeToFile(args.test,*codedata)
+        codegenSolver(args.test,schedule,cuts)
         writeWorkspaceToFile(args.test,linsys)
 
     # Dump files

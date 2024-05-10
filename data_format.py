@@ -28,6 +28,13 @@ class Tile:
 
     def assigned_data(self):
         return self.nnz()
+    
+    def snum_fe(self):
+        ''' Number of synchronization steps in the forward elimination.
+        Some kernels have an intrinsic need for aditional synchronization steps.
+        These want to increase this number accordingly.
+        '''
+        return 0
 
     def density(self):
         if self.is_diag:
@@ -158,7 +165,21 @@ class Empty(Tile):
     def empty(self):
         return True
 
-class Diaginv(Tile):
+    def __repr__(self):
+        return f'{self.classname()}'
+
+
+class SynchBuffer(Empty):
+
+    def codegen(self,s,h):
+        return (('// synchronization buffer', '// synchronization buffer'),{})
+
+    def schedule(self,num_cores=HARTS):
+        dist = [SynchBuffer() for h in range(num_cores)]
+        return dist
+
+
+class DiagInv(Tile):
     def __init__(self,collist,empty=False):
         assert(isinstance(collist,Collist))
         self.rowa = collist.rowa
@@ -192,7 +213,7 @@ class Diaginv(Tile):
             self.check_numerical_stability()
 
     def empty_copy(self):
-        tmp = Diaginv(Collist(self.rowa,self.rowz,self.cola,self.colz),empty=True)
+        tmp = DiagInv(Collist(self.rowa,self.rowz,self.cola,self.colz),empty=True)
         # copy pointers to data
         tmp.dense_triag = self.dense_triag
         tmp.dense_inverse = self.dense_inverse
@@ -201,6 +222,13 @@ class Diaginv(Tile):
     def is_rect(self):
         ''' We also store the upper triangular zeros. '''
         return True
+
+    def snum_fe(self):
+        ''' Number of synchronization steps in the forward elimination.
+        Some kernels have an intrinsic need for aditional synchronization steps.
+        These want to increase this number accordingly.
+        '''
+        return 1
 
     def check_numerical_stability(self):
         # check numerical stability of inverse
@@ -271,7 +299,7 @@ class Diaginv(Tile):
         dat[mat] = self.dense_inverse
         return (lsolve,ltsolve),dat
 
-class Fold(Diaginv,Tile):
+class Fold(DiagInv,Tile):
     def empty_copy(self):
         raise NotImplementedError()
         tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
