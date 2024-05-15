@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import matplotlib
 import math
-from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette
+from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette, list2array
 from bfloat16 import bfloat16
 
 
@@ -36,6 +36,13 @@ class Tile:
         '''
         return 0
 
+    def snum_bs(self):
+        ''' Number of synchronization steps in the backward substitution.
+        Some kernels have an intrinsic need for aditional synchronization steps.
+        These want to increase this number accordingly.
+        '''
+        return 0
+
     def density(self):
         if self.is_diag:
             # The upper part is always empty so do not count it.
@@ -59,18 +66,31 @@ class Tile:
             x = [self.cola-0.5,self.colz-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
             y = [self.rowa-0.5,self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
         else:
-            color = 'purple'
+            color = 'lime'
             x = [self.cola-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
             y = [self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
         if self.is_diag():
-            color = 'purple'
+            color = 'lime'
         lines = ax.plot(x,y,color=color,linewidth=1.5)
         plotobjs.extend(lines)
         if number is not None:
-            xmid = -0.5 + self.cola + 0.5*(self.colz-self.cola)
-            ymid = -0.5 + self.rowa + 0.5*(self.rowz-self.rowa)
-            label = f' s{number}\n{self.classname()}'
-            txt = ax.text(xmid,ymid,label,fontsize=17,color=color,ha='center',va='center')
+            # create label
+            if self.snum_fe() == 0:
+                label = f' s{number}\n{self.classname()}'
+            else:
+                label = f's{str(number)}'
+                for sy in range(self.snum_fe()):
+                    label += f',s{str(sy+1+number)}'
+                label += f'\n{self.classname()}'
+            # position label
+            if self.is_diag():
+                xpos = -0.5 + self.colz
+                ypos = -0.5 + self.rowa
+                txt = ax.text(xpos,ypos,label,fontsize=15,color=color,ha='left',va='bottom')
+            else:
+                xpos = -0.5 + self.cola + 0.5*(self.colz-self.cola)
+                ypos = -0.5 + self.rowa + 0.5*(self.rowz-self.rowa)
+                txt = ax.text(xpos,ypos,label,fontsize=15,color=color,ha='center',va='center')
             plotobjs.append(txt)
         return plotobjs
 
@@ -79,6 +99,7 @@ class Collist(Tile,dict):
     #  key is the column number
     #  value is a tuple of the two lists: ([Li],[Lx])
     #  empty columns are forbiden
+
     def nnz(self):
         nnz = 0
         for k in self:
@@ -97,6 +118,19 @@ class Collist(Tile,dict):
             (li,lx) = self[col]
             li.append(row)
             lx.append(val)
+
+    def set_bp_next(self,bp_next):
+        self.bp_next = bp_next
+        # hack
+        self.schedule_reduction()
+
+    def empty_copy(self):
+        # call super class __init__
+        new = type(self)(self.rowa,self.rowz,self.cola,self.colz)
+        new.bp_next = self.bp_next
+        new.reductiona = self.reductiona
+        new.reductionlen = self.reductionlen
+        return new
 
     def empty(self):
         return len(self) == 0
@@ -129,10 +163,10 @@ class Collist(Tile,dict):
                 sq_dict[r][c].set_color(color)
         return []
 
-    def schedule(self,num_cores=HARTS):
+    def schedule(self,cores=range(HARTS)):
         # each worker has a list of columns
-        dist = [self.empty_copy() for h in range(num_cores)]
-        load = np.zeros(num_cores)
+        dist = [self.empty_copy() for h in cores]
+        load = np.zeros(len(cores))
         # sort columns by length. The work is a Collist data structure.
         # It has the structure: {col_num: (Li,Lx)}
         sorted_cols = sorted(self.items(), key=lambda item: len(item[1][0]),reverse=True)
@@ -144,10 +178,67 @@ class Collist(Tile,dict):
             dist[least_busy_worker][col] = (Li,Lx)
         return dist
 
+    def schedule_reduction(self,cores=range(HARTS)):
+        # determine length
+        start = self.rowa
+        stop = self.bp_next
+        l = (stop-start)//len(cores)
+        thr = (stop-start)%len(cores)
+        self.reductionlen = [l+1 if h < thr else l for h in cores]
+
+        # determine start
+        ra = [self.rowa]
+        for h in cores[:-1]:
+            ra.append(ra[-1]+self.reductionlen[h])
+        self.reductiona = ra
+
+    def codegen(self,s,h):
+        # Special case of Collist having no data
+        # then the core just supports in the reduction effort
+        # but not in the computation itself
+        if self.assigned_data() == 0:
+            lsolve = f'collist_lsolve(0, NULL, NULL, 0, NULL, NULL\
+, NULL, {self.reductiona[h]}, {self.reductionlen[h]})'
+            ltsolve = f'//empty'
+            return (lsolve,ltsolve), {}
+        # define names of variables and functions
+        cols = f's{s}h{h}_assigned_cols'
+        len_cols = f's{s}h{h}_len_cols'
+        ri = f's{s}h{h}_ri'
+        rx = f's{s}h{h}_rx'
+
+
+        # collect all data together
+        cols_dat = []
+        len_cols_dat = []
+        ri_dat = []
+        rx_dat = []
+        for k,(i,x) in self.items():
+            cols_dat.append(k)
+            len_cols_dat.append(len(i))
+            ri_dat.extend(list(i))
+            rx_dat.extend(list(x))
+
+        # add data
+        dat = {}
+        dat[cols] = list2array(cols_dat,cols,base=16)
+        dat[len_cols] = list2array(len_cols_dat,len_cols,base=16)
+        dat[ri] = list2array(ri_dat,ri,base=16)
+        dat[rx] = np.array(rx_dat)
+
+        lsolve = f'collist_lsolve({len(cols_dat)}, {cols}, {len_cols}, {len(ri_dat)}, {ri}, {rx}\
+, bp_tmp{h}, {self.reductiona[h]}, {self.reductionlen[h]})'
+        ltsolve = f'collist_ltsolve({len(cols_dat)}, {cols}, {len_cols}, {len(ri_dat)}, {ri}, {rx})'
+        return (lsolve,ltsolve),dat
+
+    def snum_fe(self):
+        return 1
+
+
 class Empty(Tile):
 
-    def schedule(self,num_cores=HARTS):
-        dist = [Empty() for h in range(num_cores)]
+    def schedule(self,cores=range(HARTS)):
+        dist = [Empty() for h in cores]
         return dist
 
     def codegen(self,s,h):
@@ -174,8 +265,8 @@ class SynchBuffer(Empty):
     def codegen(self,s,h):
         return (('// synchronization buffer', '// synchronization buffer'),{})
 
-    def schedule(self,num_cores=HARTS):
-        dist = [SynchBuffer() for h in range(num_cores)]
+    def schedule(self,cores=range(HARTS)):
+        dist = [SynchBuffer() for h in cores]
         return dist
 
 
@@ -224,10 +315,9 @@ class DiagInv(Tile):
         return True
 
     def snum_fe(self):
-        ''' Number of synchronization steps in the forward elimination.
-        Some kernels have an intrinsic need for aditional synchronization steps.
-        These want to increase this number accordingly.
-        '''
+        return 1
+
+    def snum_bs(self):
         return 1
 
     def check_numerical_stability(self):
@@ -269,20 +359,20 @@ class DiagInv(Tile):
                 if c in sq_dict[r]:
                     sq_dict[r][c].set_color(color)
                 else:
-                    box = plt.Rectangle((c-.5,r-.5), 1, 1, fc=color ,ec='b',lw=1)
+                    box = plt.Rectangle((c-.5,r-.5), 1, 1, fc=color ,ec='lime',lw=1)
                     patches.append(box)
         return patches
 
-    def schedule(self,num_cores=HARTS):
+    def schedule(self,cores=range(HARTS)):
         assert(len(self.assigned_rows) == 0)
-        dist = [self.empty_copy() for h in range(num_cores)]
+        dist = [self.empty_copy() for h in cores]
         # compute list of rows for each worker
-        tmp = list(range(num_cores)) #H0, H1, H2
-        tmpr = list(range(num_cores)) #H0, H1, H2
+        tmp = list(cores) #H0, H1, H2
+        tmpr = list(cores) #H0, H1, H2
         tmpr.reverse()
         tmp.extend(tmpr) #H0 H1 H2 H2 H1 H0
         for i,r in enumerate(range(self.rowz-self.rowa-1,0,-1)): # first col is empty
-            core = tmp[i%(2*num_cores)]
+            core = tmp[i%(2*len(cores))]
             dprint(f'Assigning: r{r} H{core}\t',end='')
             dist[core].assigned_rows.append(r)
         dprint()
@@ -304,7 +394,8 @@ class Fold(DiagInv,Tile):
         raise NotImplementedError()
         tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
         return Fold(tmp)
-    def schedule(self,num_cores=HARTS):
+
+    def schedule(self,cores=range(HARTS)):
         assert(len(self.assigned_rows) == 0)
         raise NotImplementedError()
         cols = []

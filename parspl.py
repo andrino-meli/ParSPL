@@ -16,6 +16,7 @@ import general
 np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
+SYNCHRONIZE = '__rt_barrier()'
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -95,9 +96,10 @@ def assign_kernel_to_tile(tiles):
             for t in til:
                 print(f'{t}: {t.nnz()} nnz')
 
-def optimize_tiles(tiles):
+def optimize_tiles(tiles,n):
     ''' Optimize and Merge tiles.
     Parameters:
+    n: dimension of matrix
     tiles (list of lists): matrix of tiles
 
     Returns:
@@ -117,6 +119,19 @@ def optimize_tiles(tiles):
             dprint(f'merge {b} into {a}')
             a.merge(b)
             tiles[r][c] = None
+
+    # Collist tiles: only synchronize as much as necessary
+    bp_next = n
+    for c in reversed(range(numcuts-1)):
+        t = tiles[c+1][c]
+        t.set_bp_next(bp_next)
+        bp_next = t.rowa
+
+    dprint("\n Determining bp_next")
+    for c in range(numcuts-1):
+        t = tiles[c+1][c]
+        dprint(f'{t}: bp_next = {t.bp_next}\t bp reduction range = [{t.rowa}-{t.bp_next}]')
+    dprint("\n")
 
     # remove empty tiles
     for til in tiles:
@@ -145,6 +160,7 @@ def optimize_tiles(tiles):
     for tr in tiles:
         for t in tr:
             assert(t == None)
+
     return tile_list
 
 def schedule_to_workers(tile_list):
@@ -152,26 +168,24 @@ def schedule_to_workers(tile_list):
     Parameters:
     tile_list (list(list)): A list of synchronization steps. Each step can contain multiple tiles in a list, to represent multiple parallelizable workloads.
     Returns:
-    schedule (list(tuple)): A list of synchronization steps. Each step is a tuple of WORKER elements. Each element defines the work to do for that specific processing core.
+    schedule_fe (list(tuple)): A list of synchronization steps. Each step is a tuple of WORKER elements. Each element defines the work to do for that specific processing core.
+    schedule_bs (list(tuple)): Same but for the Backward Substitution.
     '''
 
-    schedule = []
+    schedule_fe, schedule_bs = [], []
     for work in tile_list:
         if len(work) > 1:
             raise NotImplementedError("Multiple tiles, so inter-kernel workload balancing, is unimplemented")
         tile = work[0]
+        dprint(f'Scheduling {tile}')
 
         # distribute work while balancing load
         dist = tile.schedule()
 
-        # purge dist from empty items:
-        for i in range(len(dist)):
-            if dist[i].assigned_data() == 0:
-                dist[i] = Empty(0,0,0,0)
-        schedule.append(tuple(dist))
-
         # add dummy synch steps if some kernels synch interanlly as well
-        dprint(dist)
+
+        # FE
+        schedule_fe.append(tuple(dist))
         maxsnum = max([d.snum_fe() for d in dist])
         for i in range(maxsnum):
             buffer_dist = []
@@ -180,14 +194,36 @@ def schedule_to_workers(tile_list):
                     buffer_dist.append(SynchBuffer(0,0,0,0))
                 else:
                     buffer_dist.append(Empty(0,0,0,0))
-            schedule.append(tuple(buffer_dist))
-    return schedule
+            schedule_fe.append(tuple(buffer_dist))
+
+        # BS
+        # in FE we want to keep emtpy collist items: they serve of value
+        # in BS we do not need these.
+        # purge dist from empty items:
+        for i in range(len(dist)):
+            if dist[i].assigned_data() == 0:
+                dist[i] = Empty(0,0,0,0)
+        maxsnum = max([d.snum_bs() for d in dist])
+        for i in range(maxsnum):
+            buffer_dist = []
+            for h in range(HARTS):
+                if dist[h].snum_fe() > i:
+                    buffer_dist.append(SynchBuffer(0,0,0,0))
+                else:
+                    buffer_dist.append(Empty(0,0,0,0))
+            schedule_bs.append(tuple(buffer_dist))
+        # add in reverse order because we reverse later
+        schedule_bs.append(tuple(dist))
+
+    # reverse 
+    schedule_bs.reverse()
+    return schedule_fe,schedule_bs
 
 
-def print_schedule(schedule):
-    print('\n########## SCHEDULING ##########')
+def print_schedule(schedule,s_offset=0):
+    #print('\n########## SCHEDULING ##########')
     for synch,step in enumerate(schedule):
-        print(f'synch. step {synch}:')
+        print(f'synch. step {synch+s_offset}:')
         for hart,work in enumerate(step):
             if work.assigned_data() == 0:
                 print(f'  H{hart} {work}: ')
@@ -196,20 +232,38 @@ def print_schedule(schedule):
         print()
 
 
-def codegenSolver(problem,schedule,bp_sync):
-    synchsteps = len(schedule)
+def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
+    synchsteps_fe = len(schedule_fe)
+    synchsteps_bs = len(schedule_bs)
     direc = f'./build/{problem}'
     if not os.path.exists(direc):
         os.makedirs(direc)
     callfile = f'{direc}/parspl.c'
     datafile = f'{direc}/scheduled_data.h'
-    bprint(f'\nDumping scheduled code to {callfile} and {datafile}.')
+    bprint(f'\nCode generation into {callfile} and {datafile}.')
     print(f"Synchronizing write access to bp at: {bp_sync}")
 
     # Gather funcalls and data
-    funcalls = [[] for i in range(HARTS)]
+    funcalls_fe = [[] for i in range(HARTS)]
+    funcalls_bs = [[] for i in range(HARTS)]
     codedata = {}
-    for s,dist in enumerate(schedule):
+    for s,dist in enumerate(schedule_fe):
+        assert(len(dist) == HARTS)
+        for h,d in enumerate(dist):
+            # call tiles codegen
+            solve,dat = d.codegen(s,h)
+            # process data
+            for k,v in dat.items():
+                assert(k.startswith(f's{s}'))
+                if k in codedata:
+                    dprint(f'Discarding {k} for s{s}h{h}: duplicate')
+                else:
+                    codedata[k] = v
+            codedata.update(dat)
+            # process function call
+            funcalls_fe[h].append(solve)
+
+    for s,dist in enumerate(schedule_bs):
         assert(len(dist) == HARTS)
         for h,d in enumerate(dist):
             # call tiles codegen
@@ -223,13 +277,13 @@ def codegenSolver(problem,schedule,bp_sync):
                     codedata[k] = v
             codedata.update(dat)
             # process function call
-            funcalls[h].append(solve)
-    SYNCHRONIZE = '__rt_barrier()'
+            funcalls_bs[h].append(solve)
 
     with open(callfile,'w') as f:
         f.write('#include <stdio.h>\n')
         f.write('#include "runtime.h"\n')
         f.write('#include "kernel.h"\n')
+        f.write('#include "workspace.h"\n')
         f.write('#include "scheduled_data.h"\n\n')
 
         # create call to lsolve
@@ -237,8 +291,8 @@ def codegenSolver(problem,schedule,bp_sync):
         f.write('\tswitch (core_id){\n')
         for h in range(HARTS):
             f.write(f'\t\tcase {h}:\n')
-            for s,(fun,_) in zip(range(synchsteps),funcalls[h]):
-                d = schedule[s][h]
+            for s,(fun,_) in zip(range(synchsteps_fe),funcalls_fe[h]):
+                d = schedule_fe[s][h]
                 synchs = [str(i) for i in range(s,s+d.snum_fe()+1)]
                 if not isinstance(d,SynchBuffer):
                     f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
@@ -249,20 +303,26 @@ def codegenSolver(problem,schedule,bp_sync):
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
         f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
-        for s in range(synchsteps):
+        for s in range(synchsteps_fe):
             f.write(f'\t\t\t// synch step {s}\n')
             f.write(f'\t\t\t{SYNCHRONIZE};\n')
         f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}\n\n')
+
+        # synchronization count in FE
+        s_offset_bs = synchsteps_fe
+        # diagonal inverse multiplication
+        s_offset_bs += 1
+
 
         # create call to ltsolve
         f.write('void ltsolve(int core_id){\n')
         f.write('\tswitch (core_id){\n')
         for h in range(HARTS):
             f.write(f'\t\tcase {h}:\n')
-            for s,(_,fun) in zip(reversed(range(synchsteps)),reversed(funcalls[h])):
-                d = schedule[s][h]
-                synchs = [str(i) for i in range(s,s+d.snum_fe()+1)]
+            for s,(_,fun) in zip(range(synchsteps_bs),funcalls_bs[h]):
+                d = schedule_bs[s][h]
+                synchs = [str(i+s_offset_bs) for i in range(s,s+d.snum_bs()+1)]
                 if not isinstance(d,SynchBuffer):
                     f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
                     f.write(f'\t\t\t{fun};\n')
@@ -272,8 +332,8 @@ def codegenSolver(problem,schedule,bp_sync):
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
         f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
-        for s in range(synchsteps):
-            f.write(f'\t\t\t// synch step {s}\n')
+        for s in range(synchsteps_bs):
+            f.write(f'\t\t\t// synch step {s+s_offset_bs}\n')
             f.write(f'\t\t\t{SYNCHRONIZE};\n')
         f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}\n\n')
@@ -282,7 +342,6 @@ def codegenSolver(problem,schedule,bp_sync):
         f.write('void solve(int core_id){\n')
         f.write('\t// lsolve\n')
         f.write('\tlsolve(core_id);\n\n')
-        f.write(f'\t{SYNCHRONIZE};\n')
 
         f.write('\t// multiply with Dinv\n')
         f.write('\tdiag_inv_mult(core_id);\n\n')
@@ -290,7 +349,6 @@ def codegenSolver(problem,schedule,bp_sync):
 
         f.write('\t// ltsolve\n')
         f.write('\tltsolve(core_id);\n\n')
-        f.write(f'\t{SYNCHRONIZE};\n')
         #f.write('\tswitch (core_id){\n')
         #for h in range(HARTS):
         #    f.write(f'\t\tcase {h}:\n')
@@ -376,6 +434,10 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve',debug=False):
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
         fc.write(f'// verification of {case}\n')
         ndarrayToCH(fc,fh,'bp',bp)
+        # temporary space for intermediate results before reduction
+        for h in range(HARTS):
+            bp_tmp = np.zeros(linsys.n)
+            ndarrayToCH(fc,fh,f'bp_tmp{h}',bp_tmp)
         # golden
         ndarrayToCH(fc,fh,'XGOLD',x_gold)
         ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
@@ -842,22 +904,28 @@ if __name__ == '__main__':
         print("L matrix to cut & schedule:", L)
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
-        tile_list = optimize_tiles(tiles) #unstructure tiles
+        tile_list = optimize_tiles(tiles,linsys.n) #unstructure tiles
         bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
-        schedule = schedule_to_workers(tile_list)
+        schedule_fe,schedule_bs = schedule_to_workers(tile_list)
         if args.schedule:
-            print_schedule(schedule)
+            print('\n## Forward Elimination ##')
+            print_schedule(schedule_fe)
+            s_offset = len(schedule_fe)
+            print('\n## Dinv vector-vector scaling ##')
+            print(f'synch. step {s_offset}:')
+            print('\n## Backward Substitution ##')
+            print_schedule(schedule_bs,s_offset=s_offset+1)
         if args.interactive_schedule:
-            interactive_plot_schedule(L,schedule,cuts)
+            interactive_plot_schedule(L,schedule_fe,cuts)
         elif args.plot:
-            plot_schedule(L,schedule,cuts)
+            plot_schedule(L,schedule_fe,cuts)
     elif args.plot:
        uselx = not args.gray_plot
        L.plot(uselx = uselx)
        plt.show()
 
     if args.codegen:
-        codegenSolver(args.test,schedule,cuts)
+        codegenSolver(args.test,schedule_fe,schedule_bs,cuts)
         case = 'lsolve'
         if args.lsolve:
             case = 'lsolve'
@@ -869,7 +937,6 @@ if __name__ == '__main__':
 
     # Dump files
     if args.dumpbuild:
-        bprint("\nDumping files:\n\n")
         subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
 
     if args.link:
