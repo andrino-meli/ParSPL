@@ -7,9 +7,33 @@
 void print_bp(int core_id){
     if(core_id == 0){
         printf("bp = [");
+        for(int i = 0; i < LINSYS_N; i++){
+            printf("r%d\t%f\n",i,bp[i]);
+        }
+        printf("]\n");
     }
 }
 #endif
+
+// Permute b to bp (b permuted)
+// TODO: make lin sys library: indirection copy
+void permute(int core_id) {
+    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+        bp[i] = b[Perm[i]];
+    }
+    //__rt_fpu_fence_full();
+    __rt_barrier();
+}
+
+// Permute back bp to x: x = P_ermute^T*bp
+// TODO: make lin sys library
+void permuteT(int core_id) {
+    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+        x[Perm[i]] = bp[i];
+    }
+    __rt_barrier();
+}
+
 
 // TODO: make lin sys library
 static inline void empty_out_bp_tmp(double* bp_tmp) {
@@ -133,7 +157,7 @@ void collist_lsolve(
     uint16_t reductionlen   // reduction length off bp_tmpH
 ){
     // pos array to index over ri, rx
-    // TODO: when streaming add an if conidtion to circumvent an empty stream
+    // TODO: when streaming add an if condition to circumvent an empty stream
     int pos = 0; 
     // work through columns
     for(int i = 0; i < num_cols; i++){

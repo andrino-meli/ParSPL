@@ -1,5 +1,10 @@
 #include <stdint.h>
 
+
+void permute(int core_id);
+
+void permuteT(int core_id);
+
 void diaginv_lsolve(
 /* 
  * Solves: x = mat*bp

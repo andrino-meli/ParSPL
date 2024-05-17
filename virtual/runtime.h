@@ -7,15 +7,11 @@
 extern pthread_barrier_t barr_all;
 
 // ----- Runtime substitutes -----
-static inline void __rt_barrier() {
-    pthread_barrier_wait(&barr_all);
-}
+void __rt_barrier();
 
-static inline void __rt_fpu_fence_full() {
-}
+void __rt_fpu_fence_full();
 
-static inline void __rt_get_timer() {
-}
+uint32_t __rt_get_timer();
 
 // ----- Runtime management -----
-extern int smain(uint32_t coreid, uint32_t num_cores);
+int smain(uint32_t coreid, uint32_t num_cores);

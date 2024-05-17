@@ -5,7 +5,20 @@
 #include <pthread.h>
 #include "runtime.h"
 
+// ----- Runtime substitutes -----
 pthread_barrier_t barr_all;
+
+void __rt_barrier() {
+    pthread_barrier_wait(&barr_all);
+}
+
+void __rt_fpu_fence_full() {
+    return;
+}
+
+uint32_t __rt_get_timer() {
+    return 0;
+}
 
 typedef struct {
     uint32_t coreid;

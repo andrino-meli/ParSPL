@@ -19,9 +19,10 @@
 
 #include <stdint.h>
 
-#include "runtime.h"   // for access to barrier
-#include "parspl.h"   // for lsolve, ltsolve, solve functions
-#include "workspace.h" // for access to bp
+#include "runtime.h"   // for runtime barrier
+#include "parspl.h"   // for lsolve, ltsolve, solve
+#include "kernel.h"   // for permute, permuteT
+#include "workspace.h" // for access to x, GOLD, GOLD_INV
 
 #define TOL (1e2) // require the error to be less than 1%
 
@@ -40,16 +41,23 @@ int verify() {
     double maxerr = 0;
     double maxrelerr = 0;
 
-    for(int i = 0; i < LINSYS_N; i++){
+    for(int j = 0; j < LINSYS_N; j++){
+        #ifdef VERBOSE
+        // if verbose: Access x in permutated order to be alligns with the plots.
+        int i = Perm[j];
+        #else
+        int i = j;
+        #endif
         // absolute error
-        double err = (double)bp[i] - XGOLD[i];
+        double err = (double)x[i] - XGOLD[i];
         double abserr = ( err >= 0 ) ? err : -err;
         if (maxerr < abserr) maxerr = abserr;
         // relative error
         double relerr = err*XGOLD_INV[i];
         double absrel = ( relerr >= 0 ) ? relerr : -relerr;
         #ifdef VERBOSE
-        printf("row %d:\t\tgold %.3e, bp %.3e,\terr %.3e,\tabsrel %.3f%%\n", i, XGOLD[i], bp[i], err, absrel*100);
+        printf("prow %d:\t\tgold %.3e, x %.3e,\terr %.3e,\tabsrel %.3f%%\trow %d\n",
+                j, XGOLD[i], x[i], err, absrel*100, i);
         #endif
         if (maxrelerr < absrel) {
             maxrelerr = absrel;
@@ -69,15 +77,29 @@ int verify() {
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
 #ifdef LSOLVE
+    permute(core_id);
+    __rt_get_timer();
     lsolve(core_id);
+    __rt_get_timer();
+    permuteT(core_id);
+    __rt_get_timer();
 #endif
 #ifdef LTSOLVE
+    permute(core_id);
+    __rt_get_timer();
     ltsolve(core_id);
+    __rt_get_timer();
+    permuteT(core_id);
+    __rt_get_timer();
 #endif
 #ifdef SOLVE
+    permute(core_id);
+    __rt_get_timer();
     solve(core_id);
+    __rt_get_timer();
+    permuteT(core_id);
+    __rt_get_timer();
 #endif
-    __rt_barrier();
     if (core_id == 0) {
         return verify();
     }

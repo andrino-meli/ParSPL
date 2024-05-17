@@ -16,6 +16,9 @@ class Tile:
         self.cola = cola # start col
         self.colz = colz # end col
 
+    REDUCES = False # Does not reduce
+
+
     def empty_copy(self):
         # call super class __init__
         return type(self)(self.rowa,self.rowz,self.cola,self.colz)
@@ -57,7 +60,7 @@ class Tile:
         return classname.split('.')[-1]
 
     def __repr__(self):
-        return f'{self.classname()} {self.rowa}-{self.rowz}r {self.cola}-{self.colz}c'
+        return f'{self.classname()}_{self.rowa}r{self.rowz}_{self.cola}c{self.colz}'
 
     def show_on_plot(self,ax,number=None):
         plotobjs = []
@@ -100,6 +103,8 @@ class Collist(Tile,dict):
     #  value is a tuple of the two lists: ([Li],[Lx])
     #  empty columns are forbiden
 
+    REDUCES = True
+
     def nnz(self):
         nnz = 0
         for k in self:
@@ -119,15 +124,10 @@ class Collist(Tile,dict):
             li.append(row)
             lx.append(val)
 
-    def set_bp_next(self,bp_next):
-        self.bp_next = bp_next
-        # hack
-        self.schedule_reduction()
-
     def empty_copy(self):
         # call super class __init__
         new = type(self)(self.rowa,self.rowz,self.cola,self.colz)
-        new.bp_next = self.bp_next
+        new.reduce_stop = self.reduce_stop
         new.reductiona = self.reductiona
         new.reductionlen = self.reductionlen
         return new
@@ -181,7 +181,7 @@ class Collist(Tile,dict):
     def schedule_reduction(self,cores=range(HARTS)):
         # determine length
         start = self.rowa
-        stop = self.bp_next
+        stop = self.reduce_stop
         l = (stop-start)//len(cores)
         thr = (stop-start)%len(cores)
         self.reductionlen = [l+1 if h < thr else l for h in cores]
@@ -193,7 +193,6 @@ class Collist(Tile,dict):
         self.reductiona = ra
 
     def codegen(self,s,h):
-        # Special case of Collist having no data
         # then the core just supports in the reduction effort
         # but not in the computation itself
         if self.assigned_data() == 0:
@@ -202,11 +201,10 @@ class Collist(Tile,dict):
             ltsolve = f'//empty'
             return (lsolve,ltsolve), {}
         # define names of variables and functions
-        cols = f's{s}h{h}_assigned_cols'
-        len_cols = f's{s}h{h}_len_cols'
-        ri = f's{s}h{h}_ri'
-        rx = f's{s}h{h}_rx'
-
+        cols = f'{self}_h{h}_assigned_cols'
+        len_cols = f'{self}_h{h}_len_cols'
+        ri = f'{self}_h{h}_ri'
+        rx = f'{self}_h{h}_rx'
 
         # collect all data together
         cols_dat = []
@@ -334,7 +332,10 @@ class DiagInv(Tile):
         ## check solution error on 10 random inputs
         maxerr = 0
         for i in range(10):
-            vec = 1000*np.random.random_sample(self.n)-1
+            RANGE = 5
+            exponent = np.random.random_sample(self.n)*(2*RANGE)-RANGE
+            vec = np.exp(exponent)
+            #vec = 1000*np.random.random_sample(self.n)-1
             sol = self.dense_inverse @ vec
             err = np.max( self.dense_triag @ sol - vec )
             if err > maxerr:
@@ -379,8 +380,8 @@ class DiagInv(Tile):
         return dist
 
     def codegen(self,s,h):
-        assrow = f's{s}h{h}_assigned_rows'
-        mat = f's{s}_diaginv'
+        assrow = f'h{h}_{self}_assigned_rows'
+        mat = f'h{h}_{self}_diaginv'
 
         lsolve = f'diaginv_lsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
         ltsolve = f'diaginv_ltsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
@@ -390,6 +391,7 @@ class DiagInv(Tile):
         return (lsolve,ltsolve),dat
 
 class Fold(DiagInv,Tile):
+    REDUCES = True
     def empty_copy(self):
         raise NotImplementedError()
         tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)

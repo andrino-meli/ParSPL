@@ -10,7 +10,8 @@ from enum import Enum
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
 from data_format import Collist, Tile, DiagInv, Empty, SynchBuffer
-from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint, color_palette, DEBUG, ndarrayToCH
+from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint
+from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array
 import general
 
 np.random.seed(0)
@@ -121,17 +122,17 @@ def optimize_tiles(tiles,n):
             tiles[r][c] = None
 
     # Collist tiles: only synchronize as much as necessary
-    bp_next = n
-    for c in reversed(range(numcuts-1)):
-        t = tiles[c+1][c]
-        t.set_bp_next(bp_next)
-        bp_next = t.rowa
+    #bp_next = n
+    #for c in reversed(range(numcuts-1)):
+    #    t = tiles[c+1][c]
+    #    t.set_bp_next(bp_next)
+    #    bp_next = t.rowa
 
-    dprint("\n Determining bp_next")
-    for c in range(numcuts-1):
-        t = tiles[c+1][c]
-        dprint(f'{t}: bp_next = {t.bp_next}\t bp reduction range = [{t.rowa}-{t.bp_next}]')
-    dprint("\n")
+    #dprint("\n Determining bp_next")
+    #for c in range(numcuts-1):
+    #    t = tiles[c+1][c]
+    #    dprint(f'{t}: bp_next = {t.bp_next}\t bp reduction range = [{t.rowa}-{t.bp_next}]')
+    #dprint("\n")
 
     # remove empty tiles
     for til in tiles:
@@ -161,6 +162,15 @@ def optimize_tiles(tiles,n):
         for t in tr:
             assert(t == None)
 
+    # assign reduction range from [self.rowa to self.reduce_stop)
+    stop = n
+    for t in reversed(tile_list):
+        t = t[0]
+        if t.REDUCES:
+            t.reduce_stop = stop
+            stop = t.rowa
+            dprint(f'Assigning reduction of bp[{t.rowa},{t.reduce_stop}) to {t}.')
+
     return tile_list
 
 def schedule_to_workers(tile_list):
@@ -178,6 +188,8 @@ def schedule_to_workers(tile_list):
             raise NotImplementedError("Multiple tiles, so inter-kernel workload balancing, is unimplemented")
         tile = work[0]
         dprint(f'Scheduling {tile}')
+        if tile.REDUCES:
+            tile.schedule_reduction()
 
         # distribute work while balancing load
         dist = tile.schedule()
@@ -185,6 +197,10 @@ def schedule_to_workers(tile_list):
         # add dummy synch steps if some kernels synch interanlly as well
 
         # FE
+        for i in range(len(dist)):
+            if dist[i].assigned_data() == 0:
+                if not isinstance(dist[i],Collist):
+                    dist[i] = Empty(0,0,0,0)
         schedule_fe.append(tuple(dist))
         maxsnum = max([d.snum_fe() for d in dist])
         for i in range(maxsnum):
@@ -254,7 +270,6 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
             solve,dat = d.codegen(s,h)
             # process data
             for k,v in dat.items():
-                assert(k.startswith(f's{s}'))
                 if k in codedata:
                     dprint(f'Discarding {k} for s{s}h{h}: duplicate')
                 else:
@@ -270,7 +285,6 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
             solve,dat = d.codegen(s,h)
             # process data
             for k,v in dat.items():
-                assert(k[0:2] == f's{s}')
                 if k in codedata:
                     dprint(f'Discarding {k} for s{s}h{h}: duplicate')
                 else:
@@ -369,14 +383,14 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
         #f.write('#include "runtime.h"\n\n')
         for k,v in codedata.items():
             if isinstance(v,list):
-                v = general.list2array(v,k)
+                v = list2array(v,k)
             if isinstance(v,np.ndarray):
-                general.ndarrayToC(f,k,v)
+                ndarrayToC(f,k,v)
             else:
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
 
 
-def writeWorkspaceToFile(problem,linsys,case='lsolve',debug=False):
+def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=False):
     direc = f'./build/{problem}'
     if not os.path.exists(direc):
         os.makedirs(direc)
@@ -392,6 +406,7 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve',debug=False):
 
         # includes and defines
         fc.write('#include "workspace.h"\n\n')
+        fh.write('#include <stdint.h>\n')
         fh.write(f'#define {case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
 
@@ -426,23 +441,41 @@ def writeWorkspaceToFile(problem,linsys,case='lsolve',debug=False):
             print('Matrix for golden model creation:')
             print(M.toarray())
 
-        # bp
-        bp = M @ x_gold
 
-        # bp, bp_copy
+        fc.write(f'// verification of {case}\n')
+        # b
+        b = M @ x_gold
+        ndarrayToCH(fc,fh,'b',b)
+        # golden
+        ndarrayToCH(fc,fh,'XGOLD',x_gold)
+        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
+        # Perm
+        Dinv = 1/np.array(linsys.D)
+        if permutation is not None:
+            perm = np.array(permutation)
+            ndarrayToCH(fc,fh,'Perm',perm)
+            ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
+            # bp, bp_copy
+            #wprint("TODO: do not use in production: bp preset")
+            bp = np.empty(linsys.n)
+            #bp = b[permutation]
+            ndarrayToCH(fc,fh,'bp',bp)
+            # Dinv
+            #permT = np.argsort(perm)
+            Dinv = Dinv[perm]
+            ndarrayToCH(fc,fh,'Dinv',Dinv)
+        else:
+            # Dinv
+            ndarrayToCH(fc,fh,'Dinv',Dinv)
+        # solution vector x
+        x = np.empty(linsys.n)
+        ndarrayToCH(fc,fh,'x',x)
         bp_cp = np.zeros(linsys.n)
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
-        fc.write(f'// verification of {case}\n')
-        ndarrayToCH(fc,fh,'bp',bp)
         # temporary space for intermediate results before reduction
         for h in range(HARTS):
             bp_tmp = np.zeros(linsys.n)
             ndarrayToCH(fc,fh,f'bp_tmp{h}',bp_tmp)
-        # golden
-        ndarrayToCH(fc,fh,'XGOLD',x_gold)
-        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
-        # Dinv
-        ndarrayToCH(fc,fh,'Dinv',1/np.array(linsys.D))
     finally:
         fh.close()
         fc.close()
@@ -663,7 +696,8 @@ def permute_csc(L,perm,permT):
     
     Parameters:
     L (Triag): Lower triangular matrix in Csc format and zero diagonal.
-    perm (np.ndarray): Permutation vector.
+    perm (np.ndarray): Permutation vector representing the column permutation.
+    permT (np.ndarray): Permutation vector representing the row permutation.
 
     Returns:
     Triag: Reordered L matrix.
@@ -795,6 +829,7 @@ if __name__ == '__main__':
     cutfile = f'./src/{args.test}.cut'
     linsys = NameSpace.load_json(filename)
     L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,f'L from {filename}')
+    perm = None # permutation matrix
 
     #L = Triag(list(range(10),Li,Lx,n,name'debug dummy data matrix'
 
@@ -933,7 +968,17 @@ if __name__ == '__main__':
             case = 'ltsolve'
         elif args.solve:
             case = 'solve'
-        writeWorkspaceToFile(args.test,linsys,case=case,debug=args.debug)
+
+        # check that permutation is actually permuting anything
+        if perm is None:
+            perm = range(linsys.n)
+        perm = list2array(list(perm),'perm',base=16) # column permutation
+        permT =  np.argsort(perm) # row permutation
+        # swap: the linear sytem solver assumes perm is the row permutation and
+        #       permT the column one
+        #perm,permT = permT,perm
+        breakpoint()
+        writeWorkspaceToFile(args.test,linsys,permutation=perm,case=case,debug=args.debug)
 
     # Dump files
     if args.dumpbuild:
