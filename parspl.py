@@ -411,29 +411,17 @@ def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=Fal
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
 
         # create golden model: M @ x_golden = bp
-        ## randomly sample from 1e-{RANGE} to 1e{RANGE}
-        if debug:
-            x_gold = np.ones(linsys.n)
-        else:
-            RANGE = 5
-            exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
-            x_gold = np.exp(exponent)
         # Determine M matrix depending on the verification case
         if case == 'solve':
             # TODO: use K directly to avoid any conversion errors
             # but since we still have LDLT as input data
             # and do not do the decomposition ourself it is safer to do this instead
             #M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
-            L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
-            L += spa.eye(linsys.n)
-            M = L @ spa.diags(linsys.D) @ L.transpose()
+            M = Kdata
         elif case == 'ltsolve':
-            M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
-            M = M.transpose()
-            M += spa.eye(linsys.n)
+            M = Ldata.transpose()
         elif case == 'lsolve':
-            M = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
-            M += spa.eye(linsys.n)
+            M = Ldata
         else:
             raise NotImplementedError(f'Case {case} unknown')
 
@@ -586,6 +574,15 @@ def cut2lines(cuts):
         s = s2
     return (x,y)
 
+def plot_cuts(problem,ax):
+    # read in cuts array
+    cuts = read_cuts(problem)
+    verify_cuts(cuts,L.n) # verify + sort
+    print(f"redrawing cuts at: {cuts}")
+    (x,y) = cut2lines(cuts)
+    lines = ax.plot(x,y,color='r',linewidth=1.5)
+    return lines
+
 def live_cuts(problem,L,uselx=True):
     ''' Live cut matrix visually.'''
     # cuts
@@ -594,18 +591,14 @@ def live_cuts(problem,L,uselx=True):
     # matrix
     (fig,ax,sq_dict) = L.plot(diag=False,uselx=uselx)
     plt.pause(0.001)
-    line = []
+    lines = []
     # update cuts from file livecuts
     while(True):
-        # read in cuts array
-        cuts = read_cuts(problem)
-        verify_cuts(cuts,L.n) # verify + sort
-        print(f"redrawing cuts at: {cuts}")
         # update the artist data
         for l in line:
             l.remove()
-        (x,y) = cut2lines(cuts)
-        line = ax.plot(x,y,color='r',linewidth=1.5)
+        # read in cuts array
+        lines = plot_cuts(problem,ax)
         # redraw
         plt.pause(2)
 
@@ -825,19 +818,60 @@ if __name__ == '__main__':
         help='Link generated code to virtual verification environment.')
 
     args = parser.parse_args()
+
+    if args.debug:
+        DEBUG = True
+        general.DEBUG = True
+        plt.ion()
+
     filename = f'./src/{args.test}.json'
     cutfile = f'./src/{args.test}.cut'
     linsys = NameSpace.load_json(filename)
     L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,f'L from {filename}')
     perm = None # permutation matrix
 
-    #L = Triag(list(range(10),Li,Lx,n,name'debug dummy data matrix'
+    ##### Give some metrics about input data:
+    #if args.lsolve or args.ltsolve or args.solve:
+    bprint('Statistics of Input Data')
+    Ldata = spa.csc_matrix((L.Lx,L.Li,L.Lp),shape=(L.n,L.n)) + spa.eye(L.n)
+    Kdata = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(L.n,L.n))
+
+    # condition number for numerical stability analysis
+    for mat,nam in [(Ldata,"Ldata"),(Kdata,"Kdata")]:
+        _, sv, _ = spa.linalg.svds(mat)
+        cond = np.max(sv)/np.min(sv)
+        print(f'Conditional Number of {nam} = {cond:.2f}')
+
+    # randomly sample from 1e-{RANGE} to 1e{RANGE}
+    if DEBUG:
+        x_gold = np.ones(linsys.n)
+    else:
+        RANGE = 5
+        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        x_gold = np.exp(exponent)
+        print(f'Norm of x_gold = {np.linalg.norm(x_gold):.2e}')
+
+    # information about performance of Lsolve, Ltsolve and solve
+    for mat,nam in reversed([(Ldata,"Ldata"),(Ldata.transpose(),"Ldata^T"),(Kdata,"Kdata")]):
+        # generate data
+        print(f'Evaluating {nam}:')
+        b_rhs = mat@x_gold
+        print(f'\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}')
+        x_sol = spa.linalg.spsolve(mat,b_rhs)
+        print(f'\tMaximum absolute error:\t\t max|g-x| = {np.max(np.abs(x_gold-x_sol)):.2e}')
+        print(f'\tMaximum relative error:\t\t max|g-x|/|g|= {np.max(np.abs(x_gold-x_sol)/np.abs(x_gold)):.2e}')
+        # compute errors
+        relerr = np.linalg.norm(x_gold-x_sol)/np.linalg.norm(x_sol)
+        print(f'\tRelative error norm:\t\t |gold-x|/|gold|= {relerr:.2e}')
+        residual = b_rhs - mat@x_sol
+        relerr = np.linalg.norm(residual)/np.linalg.norm(b_rhs)
+        relres = 0
+        print(f'\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}')
+        print()
+
+    breakpoint()
 
     #####  Do user requested exploration #####
-    if args.debug:
-        DEBUG = True
-        general.DEBUG = True
-
     if args.gray_plot:
         args.plot = True
 
@@ -882,7 +916,7 @@ if __name__ == '__main__':
             bprint("\nLevel schedule and permute L matrix:")
             PL,perm = level_schedule(linsys)
             dprint('  perm=\n',perm)
-        wprint('Setting L to PL temporarilly. Do not use this in production!')
+        print('Working with permuted L matrix from now on. Setting L to PL.')
         L = PL
 
     # Read Cutfile
@@ -912,7 +946,7 @@ if __name__ == '__main__':
 
     if args.occupation:
         bprint('\nCalculate row and column occupation:')
-        (row_occ,col_occ) = row_col_occupation(wp.L)
+        (row_occ,col_occ) = row_col_occupation(L)
         for vec,name in zip([row_occ,col_occ],['row','col']):
             bprint(f' {name}\t occupation:',end=None)
             t = 0
@@ -932,7 +966,7 @@ if __name__ == '__main__':
     if args.live_cuts:
         live_cuts(args.test,L,uselx=not args.gray_plot)
 
-    if args.schedule or args.codegen:
+    if args.schedule or args.codegen or args.link:
         cuts = read_cuts(args.test)
         bprint(f'\nCutting at: ',end='')
         print(*cuts)
@@ -955,11 +989,11 @@ if __name__ == '__main__':
         elif args.plot:
             plot_schedule(L,schedule_fe,cuts)
     elif args.plot:
-       uselx = not args.gray_plot
-       L.plot(uselx = uselx)
+       (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
+       plot_cuts(args.test,ax)
        plt.show()
 
-    if args.codegen:
+    if args.codegen or args.link:
         codegenSolver(args.test,schedule_fe,schedule_bs,cuts)
         case = 'lsolve'
         if args.lsolve:
@@ -977,7 +1011,6 @@ if __name__ == '__main__':
         # swap: the linear sytem solver assumes perm is the row permutation and
         #       permT the column one
         #perm,permT = permT,perm
-        breakpoint()
         writeWorkspaceToFile(args.test,linsys,permutation=perm,case=case,debug=args.debug)
 
     # Dump files
