@@ -5,3 +5,4 @@ virtual/workspace.h
 __pycache__/*
 build/*
 virtual/build/*
+src/_HPC*.json

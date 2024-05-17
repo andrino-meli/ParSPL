@@ -27,17 +27,6 @@
 #define TOL (1e2) // require the error to be less than 1%
 
 int verify() {
-    #ifdef VERBOSE
-        #ifdef LSOLVE
-        printf("VERIFICATION of lsolve:\n");
-        #endif
-        #ifdef LTSOLVE
-        printf("VERIFICATION of ltsolve:\n");
-        #endif
-        #ifdef SOLVE
-        printf("VERIFICATION of ldlsolve:\n");
-        #endif
-    #endif
     double maxerr = 0;
     double maxrelerr = 0;
 
@@ -67,7 +56,18 @@ int verify() {
         }
     }
     #ifdef VERBOSE
-    printf("maxrelerr %e\n", maxrelerr);
+        #ifdef LSOLVE
+        printf("\nVERIFICATION of lsolve:\n");
+        #endif
+        #ifdef LTSOLVE
+        printf("\nVERIFICATION of ltsolve:\n");
+        #endif
+        #ifdef SOLVE
+        printf("\nVERIFICATION of ldlsolve:\n");
+        #endif
+    printf(" Maximum absolute error %e\n", maxrelerr);
+    printf(" Maximum relative error %e\n", maxerr);
+    printf(" Thread 0 will return max rel err in %%\n");
     #endif
     return (int)(maxrelerr*TOL);
 }

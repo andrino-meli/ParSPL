@@ -869,7 +869,6 @@ if __name__ == '__main__':
         print(f'\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}')
         print()
 
-    breakpoint()
 
     #####  Do user requested exploration #####
     if args.gray_plot:
