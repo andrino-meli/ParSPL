@@ -840,7 +840,7 @@ if __name__ == '__main__':
     for mat,nam in [(Ldata,"Ldata"),(Kdata,"Kdata")]:
         _, sv, _ = spa.linalg.svds(mat)
         cond = np.max(sv)/np.min(sv)
-        print(f'Conditional Number of {nam} = {cond:.2f}')
+        print(f'Conditional Number of {nam} = {cond:.1f}')
 
     # randomly sample from 1e-{RANGE} to 1e{RANGE}
     if DEBUG:
@@ -854,7 +854,7 @@ if __name__ == '__main__':
     # information about performance of Lsolve, Ltsolve and solve
     for mat,nam in reversed([(Ldata,"Ldata"),(Ldata.transpose(),"Ldata^T"),(Kdata,"Kdata")]):
         # generate data
-        print(f'Evaluating {nam}:')
+        print(f'Evaluating spa.linalg.spsolve with {nam}:')
         b_rhs = mat@x_gold
         print(f'\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}')
         x_sol = spa.linalg.spsolve(mat,b_rhs)
@@ -965,7 +965,7 @@ if __name__ == '__main__':
     if args.live_cuts:
         live_cuts(args.test,L,uselx=not args.gray_plot)
 
-    if args.schedule or args.codegen or args.link:
+    if args.schedule or args.codegen:
         cuts = read_cuts(args.test)
         bprint(f'\nCutting at: ',end='')
         print(*cuts)
@@ -992,7 +992,7 @@ if __name__ == '__main__':
        plot_cuts(args.test,ax)
        plt.show()
 
-    if args.codegen or args.link:
+    if args.codegen:
         codegenSolver(args.test,schedule_fe,schedule_bs,cuts)
         case = 'lsolve'
         if args.lsolve:
@@ -1017,6 +1017,8 @@ if __name__ == '__main__':
         subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
 
     if args.link:
+        if not args.codegen:
+            wprint('Linking without regenerating code')
         bprint('\nLinking generated code to virtual verification environment')
         links = [f'ln -sf ../build/{args.test}/parspl.c virtual/parspl.c',
                  f'ln -sf ../build/{args.test}/scheduled_data.h virtual/scheduled_data.h',

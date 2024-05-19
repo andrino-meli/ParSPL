@@ -87,11 +87,11 @@ void diaginv_lsolve(
     unsigned int num_rows
 ){
     // iterate through the rows
-    for(int i = 0; i < num_rows; i++){
-        int row = assigned_rows[i];
+    for(unsigned int i = 0; i < num_rows; i++){
+        unsigned int row = assigned_rows[i];
         // dot product of row and bp
         double val = 0;
-        for(int col = 0; col <= row; col++){
+        for(unsigned col = 0; col <= row; col++){
             // TODO: currently all harts have the same access pattern to bp
             //       have to reverse to avoid tcdm access congestion
             val += mat[row * n + col] * bp[rowa + col];
@@ -103,8 +103,8 @@ void diaginv_lsolve(
     __rt_barrier();
     // update bp from bp_cp
     // TODO: indirection copy
-    for(int i = 0; i < num_rows; i++){
-        int row = assigned_rows[i];
+    for(unsigned int i = 0; i < num_rows; i++){
+        unsigned int row = assigned_rows[i];
         bp[rowa + row] = bp_cp[rowa + row];
     }
 }
@@ -121,12 +121,12 @@ void diaginv_ltsolve(
     // Therefor we only process the rows 1..n and columns 0..n-1
 ){
     // iterate through the rows
-    for(int i = 0; i < num_rows; i++){
-        int col = assigned_rows[i] - 1; // row is saved in mat as col
+    for(unsigned int i = 0; i < num_rows; i++){
+        unsigned int col = assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
         // dot product of col and bp
         double val = 0;
-        for(int row = col; row < n; row++){
+        for(unsigned int row = col; row < n; row++){
             val += mat[row * n + col] * bp[rowa + row];
             //printf("col %d row %d   mat[%d] bp[%d]\t",col, row, row*n+col,rowa + row);
             //printf("mat=%f\tbp=%f\tval=%f\n", mat[row * n + col], bp[rowa + row], val);
@@ -137,8 +137,8 @@ void diaginv_ltsolve(
     // synchronize
     __rt_barrier();
     // update bp from bp_cp
-    for(int i = 0; i < num_rows; i++){
-        int row = assigned_rows[i] - 1;
+    for(unsigned int i = 0; i < num_rows; i++){
+        unsigned int row = assigned_rows[i] - 1;
         bp[rowa + row] = bp_cp[rowa + row];
     }
 }
@@ -158,14 +158,14 @@ void collist_lsolve(
 ){
     // pos array to index over ri, rx
     // TODO: when streaming add an if condition to circumvent an empty stream
-    int pos = 0; 
+    unsigned int pos = 0; 
     // work through columns
-    for(int i = 0; i < num_cols; i++){
-        int col = assigned_cols[i];
+    for(unsigned int i = 0; i < num_cols; i++){
+        unsigned int col = assigned_cols[i];
         // access val to muliply column with
         double val = bp[col];
         // work through data in a column
-        for(int j = 0; j < len_cols[i]; j++){
+        for(unsigned int j = 0; j < len_cols[i]; j++){
             bp_tmp[ri[pos]] -= val*rx[pos];
             pos++;
         }
@@ -192,12 +192,12 @@ void collist_ltsolve(
     // pos array to index over ri, rx
     int pos = 0;
     // work through rows
-    for(int i = 0; i < num_cols; i++){
-        int row = assigned_cols[i];
+    for(unsigned int i = 0; i < num_cols; i++){
+        unsigned int row = assigned_cols[i];
         // work through data in a row: read val
         double val = bp[row];
         // update val
-        for(int j = 0; j < len_cols[i]; j++){
+        for(unsigned int j = 0; j < len_cols[i]; j++){
             val -= bp[ri[pos]]*rx[pos];
             pos++;
         }
