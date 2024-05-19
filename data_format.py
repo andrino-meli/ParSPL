@@ -380,8 +380,8 @@ class DiagInv(Tile):
         return dist
 
     def codegen(self,s,h):
-        assrow = f'h{h}_{self}_assigned_rows'
-        mat = f'h{h}_{self}_diaginv'
+        assrow = f'{self}_h{h}_assigned_rows'
+        mat = f'{self}_diaginv'
 
         lsolve = f'diaginv_lsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
         ltsolve = f'diaginv_ltsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'

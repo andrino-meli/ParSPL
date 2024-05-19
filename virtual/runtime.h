@@ -3,6 +3,7 @@
 #include <stdio.h>
 #define N_CCS 8
 #define VERBOSE
+#define PRINTF
 
 extern pthread_barrier_t barr_all;
 

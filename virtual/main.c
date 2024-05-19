@@ -55,7 +55,7 @@ int verify() {
             #endif
         }
     }
-    #ifdef VERBOSE
+    #ifdef PRINTF
         #ifdef LSOLVE
         printf("\nVERIFICATION of lsolve:\n");
         #endif

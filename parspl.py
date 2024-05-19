@@ -294,7 +294,6 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
             funcalls_bs[h].append(solve)
 
     with open(callfile,'w') as f:
-        f.write('#include <stdio.h>\n')
         f.write('#include "runtime.h"\n')
         f.write('#include "kernel.h"\n')
         f.write('#include "workspace.h"\n')
@@ -316,7 +315,9 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
                 #    f.write(f'\t\t\t{fun};\n')
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
+        f.write(f'\t\t\t#ifdef PRINTF\n')
         f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        f.write(f'\t\t\t#endif\n')
         for s in range(synchsteps_fe):
             f.write(f'\t\t\t// synch step {s}\n')
             f.write(f'\t\t\t{SYNCHRONIZE};\n')
@@ -595,7 +596,7 @@ def live_cuts(problem,L,uselx=True):
     # update cuts from file livecuts
     while(True):
         # update the artist data
-        for l in line:
+        for l in lines:
             l.remove()
         # read in cuts array
         lines = plot_cuts(problem,ax)
