@@ -436,8 +436,8 @@ def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=Fal
         b = M @ x_gold
         ndarrayToCH(fc,fh,'b',b)
         # golden
-        ndarrayToCH(fc,fh,'XGOLD',x_gold)
-        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold)
+        ndarrayToCH(fc,fh,'XGOLD',x_gold,section='')
+        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold,section='')
         # Perm
         Dinv = 1/np.array(linsys.D)
         if permutation is not None:
