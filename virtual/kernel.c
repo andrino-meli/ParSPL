@@ -2,27 +2,13 @@
 #include "kernel.h"
 #include "runtime.h"
 
-
-#ifdef VERBOSE
-void print_bp(int core_id){
-    if(core_id == 0){
-        printf("bp = [");
-        for(int i = 0; i < LINSYS_N; i++){
-            printf("r%d\t%f\n",i,bp[i]);
-        }
-        printf("]\n");
-    }
-}
-#endif
-
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
 void permute(int core_id) {
     for (int i = core_id; i < LINSYS_N; i += N_CCS) {
         bp[i] = b[Perm[i]];
     }
-    //__rt_fpu_fence_full();
-    __rt_barrier();
+    __rt_seperator();
 }
 
 // Permute back bp to x: x = P_ermute^T*bp
@@ -31,7 +17,7 @@ void permuteT(int core_id) {
     for (int i = core_id; i < LINSYS_N; i += N_CCS) {
         x[Perm[i]] = bp[i];
     }
-    __rt_barrier();
+    __rt_seperator();
 }
 
 
@@ -74,15 +60,18 @@ void diag_inv_mult(int core_id) {
             empty_out_bp_tmp(bp_tmp7);
             break;
         default:
+            #ifdef PRINTF
             printf("Error: wrong core count configuration in code generation.");
+            #endif
             break;
     }
+    __rt_seperator();
 }
 
 void diaginv_lsolve(
     unsigned int n,
     unsigned int rowa, // row/column offset
-    double mat[], // invrse matrix
+    double mat[], // inverse matrix
     uint16_t assigned_rows[],
     unsigned int num_rows
 ){
@@ -100,7 +89,7 @@ void diaginv_lsolve(
         bp_cp[rowa + row] = val;
     }
     // synchronize
-    __rt_barrier();
+    __rt_seperator();
     // update bp from bp_cp
     // TODO: indirection copy
     for(unsigned int i = 0; i < num_rows; i++){
@@ -135,7 +124,7 @@ void diaginv_ltsolve(
         bp_cp[rowa + col] = val;
     }
     // synchronize
-    __rt_barrier();
+    __rt_seperator();
     // update bp from bp_cp
     for(unsigned int i = 0; i < num_rows; i++){
         unsigned int row = assigned_rows[i] - 1;
@@ -171,7 +160,7 @@ void collist_lsolve(
         }
     }
     // synchronize
-    __rt_barrier();
+    __rt_seperator();
     // reduce bp_tmp1 up to bp_tmp7 into bp
     for(int i = reductiona; i < reductiona + reductionlen; i++) {
         // adder tree

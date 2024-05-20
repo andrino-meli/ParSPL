@@ -26,6 +26,12 @@
 
 #define TOL (1e2) // require the error to be less than 1%
 
+void __rt_seperator() {
+    __rt_barrier();
+    __rt_fpu_fence_full();
+    __rt_get_timer();
+}
+
 int verify() {
     double maxerr = 0;
     double maxrelerr = 0;
@@ -77,31 +83,19 @@ int verify() {
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
 #ifdef LSOLVE
-    __rt_get_timer();
     permute(core_id);
-    __rt_get_timer();
     lsolve(core_id);
-    __rt_get_timer();
     permuteT(core_id);
-    __rt_get_timer();
 #endif
 #ifdef LTSOLVE
-    __rt_get_timer();
     permute(core_id);
-    __rt_get_timer();
     ltsolve(core_id);
-    __rt_get_timer();
     permuteT(core_id);
-    __rt_get_timer();
 #endif
 #ifdef SOLVE
-    __rt_get_timer();
     permute(core_id);
-    __rt_get_timer();
     solve(core_id);
-    __rt_get_timer();
     permuteT(core_id);
-    __rt_get_timer();
 #endif
     if (core_id == 0) {
         return verify();

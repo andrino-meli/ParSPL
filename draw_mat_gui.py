@@ -49,9 +49,9 @@ if __name__ == '__main__':
         dim = args.dim
         assert(dim > 0)
         grid = np.zeros((dim,dim))     # matrix to generate
-        linsys = NameSpace()
+        linsys = DotDict()
     else:
-        linsys = NameSpace.load_json(filename)
+        linsys = loadDotDict(filename)
         L = spa.csc_matrix((linsys.Lx,linsys.Li,linsys.Lp),shape=(linsys.n,linsys.n))
         grid = L.toarray()
         dim = linsys.n
@@ -137,5 +137,5 @@ if __name__ == '__main__':
     linsys.Kx = K.data
 
     bprint(f'Dumping data to {filename}')
-    linsys.dump_json(filename)
+    dumpDotDict(linsys,filename)
 

@@ -10,14 +10,14 @@ from enum import Enum
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
 from data_format import Collist, Tile, DiagInv, Empty, SynchBuffer
-from general import escape, HARTS, eprint, wprint, bprint, NameSpace, dprint
+from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array
 import general
 
 np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
-SYNCHRONIZE = '__rt_barrier()'
+BARRIER = f'\t\t\t__rt_seperator();\n'
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -310,7 +310,7 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
                 if not isinstance(d,SynchBuffer):
                     f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
                     f.write(f'\t\t\t{fun};\n')
-                    f.write(f'\t\t\t{SYNCHRONIZE};\n')
+                    f.write(BARRIER)
                 #else:
                 #    f.write(f'\t\t\t{fun};\n')
             f.write(f'\t\t\tbreak;\n')
@@ -320,7 +320,7 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
         f.write(f'\t\t\t#endif\n')
         for s in range(synchsteps_fe):
             f.write(f'\t\t\t// synch step {s}\n')
-            f.write(f'\t\t\t{SYNCHRONIZE};\n')
+            f.write(BARRIER)
         f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}\n\n')
 
@@ -341,43 +341,26 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
                 if not isinstance(d,SynchBuffer):
                     f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
                     f.write(f'\t\t\t{fun};\n')
-                    f.write(f'\t\t\t{SYNCHRONIZE};\n')
+                    f.write(BARRIER)
                 #else:
                 #    f.write(f'\t\t\t{fun};\n')
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
+        f.write(f'\t\t\t#ifdef PRINTF\n')
         f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        f.write(f'\t\t\t#endif\n')
         for s in range(synchsteps_bs):
             f.write(f'\t\t\t// synch step {s+s_offset_bs}\n')
-            f.write(f'\t\t\t{SYNCHRONIZE};\n')
+            f.write(BARRIER)
         f.write(f'\t\t\tbreak;\n')
         f.write('\t}\n}\n\n')
 
         # create call to solve
         f.write('void solve(int core_id){\n')
-        f.write('\t// lsolve\n')
-        f.write('\tlsolve(core_id);\n\n')
-
-        f.write('\t// multiply with Dinv\n')
-        f.write('\tdiag_inv_mult(core_id);\n\n')
-        f.write(f'\t{SYNCHRONIZE};\n')
-
-        f.write('\t// ltsolve\n')
-        f.write('\tltsolve(core_id);\n\n')
-        #f.write('\tswitch (core_id){\n')
-        #for h in range(HARTS):
-        #    f.write(f'\t\tcase {h}:\n')
-        #            f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
-        #            f.write(f'\t\t\t{fun};\n')
-        #            f.write(f'\t\t\t{SYNCHRONIZE};\n')
-        #    f.write(f'\t\t\tbreak;\n')
-        #f.write(f'\t\tdefault:\n')
-        #f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
-        #for s in range(synchsteps):
-        #    f.write(f'\t\t\t// synch step {s}\n')
-        #    f.write(f'\t\t\t{SYNCHRONIZE};\n')
-        #f.write(f'\t\t\tbreak;\n')
-        f.write('}\n\n')
+        f.write('\tlsolve(core_id);\n')
+        f.write('\tdiag_inv_mult(core_id);\n')
+        f.write('\tltsolve(core_id);\n')
+        f.write('}\n')
 
     # dump data fo file
     with open(datafile,'w') as f:
@@ -392,6 +375,9 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
 
 
 def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=False):
+    global Kdata
+    global Ldata
+    global x_gold
     direc = f'./build/{problem}'
     if not os.path.exists(direc):
         os.makedirs(direc)
@@ -553,9 +539,9 @@ def plot_schedule(L,schedule,cuts):
     plt.show()
 
 
-def read_cuts(problem):
+def read_cuts(problem,wd):
     ''' Read new-line seperated list from file '''
-    cutfile = f'src/{problem}.cut'
+    cutfile = f'{wd}/src/{problem}.cut'
     cuts = []
     with open(cutfile,'r') as f:
         for l in f.readlines():
@@ -575,16 +561,16 @@ def cut2lines(cuts):
         s = s2
     return (x,y)
 
-def plot_cuts(problem,ax):
+def plot_cuts(problem,ax,wd):
     # read in cuts array
-    cuts = read_cuts(problem)
+    cuts = read_cuts(problem,wd)
     verify_cuts(cuts,L.n) # verify + sort
     print(f"redrawing cuts at: {cuts}")
     (x,y) = cut2lines(cuts)
     lines = ax.plot(x,y,color='r',linewidth=1.5)
     return lines
 
-def live_cuts(problem,L,uselx=True):
+def live_cuts(problem,L,wd,uselx=True):
     ''' Live cut matrix visually.'''
     # cuts
     cutfile = f'src/{problem}.cut'
@@ -599,7 +585,7 @@ def live_cuts(problem,L,uselx=True):
         for l in lines:
             l.remove()
         # read in cuts array
-        lines = plot_cuts(problem,ax)
+        lines = plot_cuts(problem,ax,wd)
         # redraw
         plt.pause(2)
 
@@ -767,67 +753,20 @@ def incomplete_level_schedule(L,threshold, intra_level_reorder = False):
         PL = permute_csc(L,perm,permT)
     return (PL,perm)
 
-if __name__ == '__main__':
-    # Argument parsing
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--test', '-t', nargs='?',
-        default='_HPC_3x3_H2',
-        help='Testcase to take data from.',
-    )
-    parser.add_argument('--simd_blocking','-s', action='store_true',
-        help='Explore SIMD')
-    parser.add_argument('--live_cuts', '-l' ,action='store_true',
-        help='Interactively determine life cuts. Edit file livecuts to define the cuts for candidate X.')
-    parser.add_argument('--cut', '-c' , action='store_true',
-        help='Propose cuts to partition matrix into regions.')
-    parser.add_argument('--schedule', '-S' , action='store_true',
-        help='Schedule cut appart matrix.')
-    parser.add_argument('--interactive_schedule', action='store_true',
-        help='Schedule matrix interactively..')
-    parser.add_argument('--plot', '-p' , action='store_true',
-        help='Color plot scheduled matrix.')
-    parser.add_argument('--modolo', '-m' , action='store_true',
-        help='Color Matrix accodring to modolo schedule.')
-    parser.add_argument('--codegen', '-g' , action='store_true',
-        help='Generate Code Structures from Schedule.')
-    parser.add_argument('--level', action='store_true',
-        help='Compute level vector derived by level scheduling the L matrix. Show the levels and the amount of columns inside of each.')
-    parser.add_argument('--level_schedule', action='store_true',
-        help='Level schedule and permute L matrix.')
-    parser.add_argument('--level_thr', type=int, default=None,
-        help='Level threshold for partly level scheduling.')
-    parser.add_argument('--occupation', action='store_true',
-        help='Compute row/column occupation, so number of elements.')
-    parser.add_argument('--intra_level_reorder', action='store_true',
-        help='Permute, so sort increasingly, inside the levels by column occupation.')
-    parser.add_argument('--gray_plot', action='store_true',
-        help='Plot cells in grey instead of color them by value.')
-    parser.add_argument('--debug', action='store_true',
-        help='Debug print a lot of information. Use on small matrices.')
-    parser.add_argument('--invert', action='store_true',
-        help='Invert L matrix')
-    parser.add_argument('--dumpbuild', action='store_true',
-        help='Dump files in directory of problem to shell.')
-    parser.add_argument('--lsolve', action='store_true',
-        help='Verify lsolve. Put golden model into workspace.')
-    parser.add_argument('--ltsolve', action='store_true',
-        help='Verify ltsolve. Put golden model into workspace.')
-    parser.add_argument('--solve', action='store_true',
-        help='Verify ldlsolve. Put golden model into workspace.')
-    parser.add_argument('--link', action='store_true',
-        help='Link generated code to virtual verification environment.')
 
-    args = parser.parse_args()
-
+def main(args):
+    global DEBUG
+    global Kdata
+    global Ldata
+    global x_gold
     if args.debug:
         DEBUG = True
         general.DEBUG = True
         plt.ion()
 
-    filename = f'./src/{args.test}.json'
-    cutfile = f'./src/{args.test}.cut'
-    linsys = NameSpace.load_json(filename)
+    filename = f'{args.wd}/src/{args.test}.json'
+    cutfile = f'{args.wd}/src/{args.test}.cut'
+    linsys = general.loadDotDict(filename)
     L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,f'L from {filename}')
     perm = None # permutation matrix
 
@@ -925,7 +864,7 @@ if __name__ == '__main__':
             print(f'Cut File {cutfile} does not exist. Proposing cuts.')
         else:
             print(f'Cut File {cutfile} exists. Overwriting.')
-            cuts = read_cuts(args.test)
+            cuts = read_cuts(args.test,args.wd)
             bprint(f'\nOrriginally cutting at: ',end='')
             print(*cuts)
         # suggesting cuts:
@@ -964,10 +903,10 @@ if __name__ == '__main__':
         simd_blocking(linsys)
 
     if args.live_cuts:
-        live_cuts(args.test,L,uselx=not args.gray_plot)
+        live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
 
     if args.schedule or args.codegen:
-        cuts = read_cuts(args.test)
+        cuts = read_cuts(args.test,args.wd)
         bprint(f'\nCutting at: ',end='')
         print(*cuts)
         print("L matrix to cut & schedule:", L)
@@ -1021,12 +960,72 @@ if __name__ == '__main__':
         if not args.codegen:
             wprint('Linking without regenerating code')
         bprint('\nLinking generated code to virtual verification environment')
-        links = [f'ln -sf ../build/{args.test}/parspl.c virtual/parspl.c',
-                 f'ln -sf ../build/{args.test}/scheduled_data.h virtual/scheduled_data.h',
-                 f'ln -sf ../build/{args.test}/workspace.c virtual/workspace.c',
-                 f'ln -sf ../build/{args.test}/workspace.h virtual/workspace.h' ]
+        wd = args.wd
+        links = [
+        f'ln -sf ../build/{args.test}/parspl.c {wd}/virtual/parspl.c',
+        f'ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h',
+        f'ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c',
+        f'ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h' ]
         for l in links:
-            subprocess.run(l,shell=True)
+            print(l)
+            subprocess.run(l,shell=True,check=True)
 
     if DEBUG:
         breakpoint()
+
+# Argument parsing
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '--test', '-t', nargs='?',
+    default='_HPC_3x3_H2',
+    help='Testcase to take data from.',
+)
+parser.add_argument('--simd_blocking','-s', action='store_true',
+    help='Explore SIMD')
+parser.add_argument('--live_cuts', '-l' ,action='store_true',
+    help='Interactively determine life cuts. Edit file livecuts to define the cuts for candidate X.')
+parser.add_argument('--cut', '-c' , action='store_true',
+    help='Propose cuts to partition matrix into regions.')
+parser.add_argument('--schedule', '-S' , action='store_true',
+    help='Schedule cut appart matrix.')
+parser.add_argument('--interactive_schedule', action='store_true',
+    help='Schedule matrix interactively..')
+parser.add_argument('--plot', '-p' , action='store_true',
+    help='Color plot scheduled matrix.')
+parser.add_argument('--modolo', '-m' , action='store_true',
+    help='Color Matrix accodring to modolo schedule.')
+parser.add_argument('--codegen', '-g' , action='store_true',
+    help='Generate Code Structures from Schedule.')
+parser.add_argument('--level', action='store_true',
+    help='Compute level vector derived by level scheduling the L matrix. Show the levels and the amount of columns inside of each.')
+parser.add_argument('--level_schedule', action='store_true',
+    help='Level schedule and permute L matrix.')
+parser.add_argument('--level_thr', type=int, default=None,
+    help='Level threshold for partly level scheduling.')
+parser.add_argument('--occupation', action='store_true',
+    help='Compute row/column occupation, so number of elements.')
+parser.add_argument('--intra_level_reorder', action='store_true',
+    help='Permute, so sort increasingly, inside the levels by column occupation.')
+parser.add_argument('--gray_plot', action='store_true',
+    help='Plot cells in grey instead of color them by value.')
+parser.add_argument('--debug', action='store_true',
+    help='Debug print a lot of information. Use on small matrices.')
+parser.add_argument('--invert', action='store_true',
+    help='Invert L matrix')
+parser.add_argument('--dumpbuild', action='store_true',
+    help='Dump files in directory of problem to shell.')
+parser.add_argument('--lsolve', action='store_true',
+    help='Verify lsolve. Put golden model into workspace.')
+parser.add_argument('--ltsolve', action='store_true',
+    help='Verify ltsolve. Put golden model into workspace.')
+parser.add_argument('--solve', action='store_true',
+    help='Verify ldlsolve. Put golden model into workspace.')
+parser.add_argument('--link', action='store_true',
+    help='Link generated code to virtual verification environment.')
+parser.add_argument('--wd', type=str, default='./',
+    help='Working directory.')
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    main(args)

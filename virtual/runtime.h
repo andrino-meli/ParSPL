@@ -14,5 +14,8 @@ void __rt_fpu_fence_full();
 
 uint32_t __rt_get_timer();
 
+// sum of the above three for convenience
+void __rt_seperator();
+
 // ----- Runtime management -----
 int smain(uint32_t coreid, uint32_t num_cores);
