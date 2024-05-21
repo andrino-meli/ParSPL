@@ -561,10 +561,10 @@ def cut2lines(cuts):
         s = s2
     return (x,y)
 
-def plot_cuts(problem,ax,wd):
+def plot_cuts(problem,ax,n,wd):
     # read in cuts array
     cuts = read_cuts(problem,wd)
-    verify_cuts(cuts,L.n) # verify + sort
+    verify_cuts(cuts,n) # verify + sort
     print(f"redrawing cuts at: {cuts}")
     (x,y) = cut2lines(cuts)
     lines = ax.plot(x,y,color='r',linewidth=1.5)
@@ -585,7 +585,7 @@ def live_cuts(problem,L,wd,uselx=True):
         for l in lines:
             l.remove()
         # read in cuts array
-        lines = plot_cuts(problem,ax,wd)
+        lines = plot_cuts(problem,ax,L.n,wd)
         # redraw
         plt.pause(2)
 
@@ -929,7 +929,7 @@ def main(args):
             plot_schedule(L,schedule_fe,cuts)
     elif args.plot:
        (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
-       plot_cuts(args.test,ax)
+       plot_cuts(args.test,L.n,ax)
        plt.show()
 
     if args.codegen:
@@ -1022,7 +1022,7 @@ parser.add_argument('--solve', action='store_true',
     help='Verify ldlsolve. Put golden model into workspace.')
 parser.add_argument('--link', action='store_true',
     help='Link generated code to virtual verification environment.')
-parser.add_argument('--wd', type=str, default='./',
+parser.add_argument('--wd', type=str, default='.',
     help='Working directory.')
 
 
