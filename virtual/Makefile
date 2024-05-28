@@ -13,7 +13,7 @@ build:
 	mkdir -p $@
 
 build/%.o: %.c $(VIRT_RT) | build
-	gcc $(CFLAGS) -g -c $< -o $@
+	gcc $(CFLAGS) -gdwarf-3 -gstrict-dwarf -c $< -o $@
 
 build/virtual_main: $(OBJ)
 	#prerequisites: $?

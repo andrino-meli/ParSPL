@@ -5,8 +5,10 @@
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
 void permute(int core_id) {
-    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
-        bp[i] = b[Perm[i]];
+    if (core_id < N_CCS){
+        for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+            bp[i] = b[Perm[i]];
+        }
     }
     __rt_seperator();
 }
@@ -14,8 +16,10 @@ void permute(int core_id) {
 // Permute back bp to x: x = P_ermute^T*bp
 // TODO: make lin sys library
 void permuteT(int core_id) {
-    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
-        x[Perm[i]] = bp[i];
+    if (core_id < N_CCS){
+        for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+            x[Perm[i]] = bp[i];
+        }
     }
     __rt_seperator();
 }
@@ -30,8 +34,10 @@ static inline void empty_out_bp_tmp(double* bp_tmp) {
 
 void diag_inv_mult(int core_id) {
     // multiply
-    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
-        bp[i] *= Dinv[i];
+    if(core_id < N_CCS) {
+        for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+            bp[i] *= Dinv[i];
+        }
     }
     // clear out bp_tmp
     switch (core_id){
@@ -78,6 +84,7 @@ void diaginv_lsolve(
     // iterate through the rows
     for(unsigned int i = 0; i < num_rows; i++){
         unsigned int row = assigned_rows[i];
+        //printf("diaginv_lsolve: processing row %d, row+rowa %d\n",row,row+rowa);
         // dot product of row and bp
         double val = 0;
         for(unsigned col = 0; col <= row; col++){
@@ -113,6 +120,7 @@ void diaginv_ltsolve(
     for(unsigned int i = 0; i < num_rows; i++){
         unsigned int col = assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
+        //printf("diaginv_ltsolve: processing col %d, col+rowa %d\n",col,col+rowa);
         // dot product of col and bp
         double val = 0;
         for(unsigned int row = col; row < n; row++){

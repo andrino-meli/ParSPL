@@ -316,7 +316,7 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
         f.write(f'\t\t\t#ifdef PRINTF\n')
-        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.\\n");\n')
         f.write(f'\t\t\t#endif\n')
         for s in range(synchsteps_fe):
             f.write(f'\t\t\t// synch step {s}\n')
@@ -347,7 +347,7 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
             f.write(f'\t\t\tbreak;\n')
         f.write(f'\t\tdefault:\n')
         f.write(f'\t\t\t#ifdef PRINTF\n')
-        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.");\n')
+        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.\\n");\n')
         f.write(f'\t\t\t#endif\n')
         for s in range(synchsteps_bs):
             f.write(f'\t\t\t// synch step {s+s_offset_bs}\n')
@@ -772,15 +772,24 @@ def main(args):
 
     ##### Give some metrics about input data:
     #if args.lsolve or args.ltsolve or args.solve:
-    bprint('Statistics of Input Data')
     Ldata = spa.csc_matrix((L.Lx,L.Li,L.Lp),shape=(L.n,L.n)) + spa.eye(L.n)
     Kdata = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(L.n,L.n))
+    if args.numerical_analysis:
+        bprint('Statistics of Input Data')
 
-    # condition number for numerical stability analysis
-    for mat,nam in [(Ldata,"Ldata"),(Kdata,"Kdata")]:
-        _, sv, _ = spa.linalg.svds(mat)
-        cond = np.max(sv)/np.min(sv)
-        print(f'Conditional Number of {nam} = {cond:.1f}')
+        # condition number for numerical stability analysis
+        for mat,nam in [(Ldata,"Ldata"),(Kdata,"Kdata")]:
+            k = min(6,min(mat.shape)-1)
+            #try:
+            #    sv_max = spa.linalg.svds(mat, return_singular_vectors=False, k=k, which='LM')
+            #    sv_min = spa.linalg.svds(mat, return_singular_vectors=False, k=k, which='SM')
+            #    sv_min = min(sv_min)
+            #    sv_max = max(sv_min)
+            #    cond = sv_max/sv_min
+            #    print(f'Conditional Number of {nam} = {cond:.1f}')
+            #except Exception as e:
+            cond = np.linalg.cond(mat.todense())
+            print(f'Conditional Number of {nam} = {cond:.1f}')
 
     # randomly sample from 1e-{RANGE} to 1e{RANGE}
     if DEBUG:
@@ -789,25 +798,27 @@ def main(args):
         RANGE = 5
         exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
         x_gold = np.exp(exponent)
-        print(f'Norm of x_gold = {np.linalg.norm(x_gold):.2e}')
+        if args.numerical_analysis:
+            print(f'Norm of x_gold = {np.linalg.norm(x_gold):.2e}')
 
     # information about performance of Lsolve, Ltsolve and solve
-    for mat,nam in reversed([(Ldata,"Ldata"),(Ldata.transpose(),"Ldata^T"),(Kdata,"Kdata")]):
-        # generate data
-        print(f'Evaluating spa.linalg.spsolve with {nam}:')
-        b_rhs = mat@x_gold
-        print(f'\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}')
-        x_sol = spa.linalg.spsolve(mat,b_rhs)
-        print(f'\tMaximum absolute error:\t\t max|g-x| = {np.max(np.abs(x_gold-x_sol)):.2e}')
-        print(f'\tMaximum relative error:\t\t max|g-x|/|g|= {np.max(np.abs(x_gold-x_sol)/np.abs(x_gold)):.2e}')
-        # compute errors
-        relerr = np.linalg.norm(x_gold-x_sol)/np.linalg.norm(x_sol)
-        print(f'\tRelative error norm:\t\t |gold-x|/|gold|= {relerr:.2e}')
-        residual = b_rhs - mat@x_sol
-        relerr = np.linalg.norm(residual)/np.linalg.norm(b_rhs)
-        relres = 0
-        print(f'\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}')
-        print()
+    if args.numerical_analysis:
+        for mat,nam in reversed([(Ldata,"Ldata"),(Ldata.transpose(),"Ldata^T"),(Kdata,"Kdata")]):
+            # generate data
+            print(f'Evaluating spa.linalg.spsolve with {nam}:')
+            b_rhs = mat@x_gold
+            print(f'\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}')
+            x_sol = spa.linalg.spsolve(mat,b_rhs)
+            print(f'\tMaximum absolute error:\t\t max|g-x| = {np.max(np.abs(x_gold-x_sol)):.2e}')
+            print(f'\tMaximum relative error:\t\t max|g-x|/|g|= {np.max(np.abs(x_gold-x_sol)/np.abs(x_gold)):.2e}')
+            # compute errors
+            relerr = np.linalg.norm(x_gold-x_sol)/np.linalg.norm(x_sol)
+            print(f'\tRelative error norm:\t\t |gold-x|/|gold|= {relerr:.2e}')
+            residual = b_rhs - mat@x_sol
+            relerr = np.linalg.norm(residual)/np.linalg.norm(b_rhs)
+            relres = 0
+            print(f'\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}')
+            print()
 
 
     #####  Do user requested exploration #####
@@ -929,12 +940,12 @@ def main(args):
             plot_schedule(L,schedule_fe,cuts)
     elif args.plot:
        (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
-       plot_cuts(args.test,L.n,ax)
+       plot_cuts(args.test,ax,L.n,wd=args.wd)
        plt.show()
 
     if args.codegen:
         codegenSolver(args.test,schedule_fe,schedule_bs,cuts)
-        case = 'lsolve'
+        case = 'solve'
         if args.lsolve:
             case = 'lsolve'
         elif args.ltsolve:
@@ -972,6 +983,8 @@ def main(args):
 
     if DEBUG:
         breakpoint()
+
+    return vars()
 
 # Argument parsing
 parser = argparse.ArgumentParser()
@@ -1023,6 +1036,8 @@ parser.add_argument('--solve', action='store_true',
 parser.add_argument('--link', action='store_true',
     help='Link generated code to virtual verification environment.')
 parser.add_argument('--wd', type=str, default='.',
+    help='Working directory.')
+parser.add_argument('--numerical_analysis', action='store_true',
     help='Working directory.')
 
 

@@ -7,6 +7,8 @@
 
 // ----- Runtime substitutes -----
 pthread_barrier_t barr_all;
+//spawn 3 additional core to check that the code handles core mismatch configuration
+#define N_CCS_MISSMATCH (N_CCS + 3)
 
 void __rt_barrier() {
     pthread_barrier_wait(&barr_all);
@@ -36,21 +38,21 @@ void *core_wrap(void *params) {
 
 int main() {
     // create thread pool
-    pthread_barrier_init(&barr_all, NULL, N_CCS);
-    pthread_t cc[N_CCS];
-    cc_params_t cc_params[N_CCS];
+    pthread_barrier_init(&barr_all, NULL, N_CCS_MISSMATCH);
+    pthread_t cc[N_CCS_MISSMATCH];
+    cc_params_t cc_params[N_CCS_MISSMATCH];
     // start threads
-    for (int i=0; i<N_CCS; ++i) {
+    for (int i=0; i<N_CCS_MISSMATCH; ++i) {
         cc_params[i].coreid = i;
-        cc_params[i].num_cores = N_CCS;
+        cc_params[i].num_cores = N_CCS_MISSMATCH;
         if (pthread_create(&cc[i], NULL, core_wrap, &cc_params[i])) return -i;
     }
     // join threads
-    for (int i=0; i<N_CCS; ++i) {
+    for (int i=0; i<N_CCS_MISSMATCH; ++i) {
         if (pthread_join(cc[i], NULL)) return -i;
     }
     // print return values:
-    for (int i=0; i<N_CCS; ++i) {
+    for (int i=0; i<N_CCS_MISSMATCH; ++i) {
         printf("Thread %d returned %d\n",i,cc_params[i].ret);
     }
     return 0;

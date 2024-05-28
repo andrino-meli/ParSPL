@@ -23,12 +23,13 @@
 #include "parspl.h"   // for lsolve, ltsolve, solve
 #include "kernel.h"   // for permute, permuteT
 #include "workspace.h" // for access to x, GOLD, GOLD_INV
+#include "print_float.h"
 
 #define TOL (1e2) // require the error to be less than 1%
 
 void __rt_seperator() {
-    __rt_barrier();
     __rt_fpu_fence_full();
+    __rt_barrier();
     __rt_get_timer();
 }
 
@@ -37,12 +38,8 @@ int verify() {
     double maxrelerr = 0;
 
     for(int j = 0; j < LINSYS_N; j++){
-        #ifdef VERBOSE
-        // if verbose: Access x in permutated order to be alligns with the plots.
+        // Access x in permutated order to be alligns with the plots.
         int i = Perm[j];
-        #else
-        int i = j;
-        #endif
         // absolute error
         double err = (double)x[i] - XGOLD[i];
         double abserr = ( err >= 0 ) ? err : -err;
@@ -53,11 +50,15 @@ int verify() {
         #ifdef VERBOSE
         printf("prow %d:\t\tgold %.3e, x %.3e,\terr %.3e,\tabsrel %.3f%%\trow %d\n",
                 j, XGOLD[i], x[i], err, absrel*100, i);
+        #elif PRINTF
+        printf("prow %d:\t\tx ",j);
+        printFloat(x[i]);
+        printf("\n");
         #endif
         if (maxrelerr < absrel) {
             maxrelerr = absrel;
             #ifdef VERBOSE
-            printf("Updating maxrelerr on row %d\n",i);
+            printf("Updating maxrelerr on prow %d\n",i);
             #endif
         }
     }
