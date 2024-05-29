@@ -248,10 +248,10 @@ def print_schedule(schedule,s_offset=0):
         print()
 
 
-def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
+def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
     synchsteps_fe = len(schedule_fe)
     synchsteps_bs = len(schedule_bs)
-    direc = f'./build/{problem}'
+    direc = f'{args.wd}/build/{args.test}'
     if not os.path.exists(direc):
         os.makedirs(direc)
     callfile = f'{direc}/parspl.c'
@@ -374,17 +374,22 @@ def codegenSolver(problem,schedule_fe,schedule_bs,bp_sync):
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
 
 
-def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=False):
+def writeWorkspaceToFile(args,linsys,permutation=None):
     global Kdata
     global Ldata
     global x_gold
-    direc = f'./build/{problem}'
+    direc = f'{args.wd}/build/{args.test}'
     if not os.path.exists(direc):
         os.makedirs(direc)
     workh = f'{direc}/workspace.h'
     workc = f'{direc}/workspace.c'
     goldenh = f'{direc}/golden.h'
     bprint(f'\nCreating workspace')
+    case = 'solve'
+    if args.lsolve:
+        case = 'lsolve'
+    elif args.ltsolve:
+        case = 'ltsolve'
     print(f'Dumping to {workh} and {workc}.\nIncluding golden model for **{case}**')
 
     try:
@@ -399,20 +404,18 @@ def writeWorkspaceToFile(problem,linsys,permutation=None,case='lsolve',debug=Fal
 
         # create golden model: M @ x_golden = bp
         # Determine M matrix depending on the verification case
-        if case == 'solve':
+        if args.ltsolve:
+            M = Ldata.transpose()
+        elif args.lsolve:
+            M = Ldata
+        else:
             # TODO: use K directly to avoid any conversion errors
             # but since we still have LDLT as input data
             # and do not do the decomposition ourself it is safer to do this instead
             #M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
             M = Kdata
-        elif case == 'ltsolve':
-            M = Ldata.transpose()
-        elif case == 'lsolve':
-            M = Ldata
-        else:
-            raise NotImplementedError(f'Case {case} unknown')
 
-        if debug and linsys.n < 20:
+        if args.debug and linsys.n < 20:
             print('Matrix for golden model creation:')
             print(M.toarray())
 
@@ -944,7 +947,7 @@ def main(args):
        plt.show()
 
     if args.codegen:
-        codegenSolver(args.test,schedule_fe,schedule_bs,cuts)
+        codegenSolver(args,schedule_fe,schedule_bs,cuts)
         case = 'solve'
         if args.lsolve:
             case = 'lsolve'
@@ -961,11 +964,11 @@ def main(args):
         # swap: the linear sytem solver assumes perm is the row permutation and
         #       permT the column one
         #perm,permT = permT,perm
-        writeWorkspaceToFile(args.test,linsys,permutation=perm,case=case,debug=args.debug)
+        writeWorkspaceToFile(args,linsys,permutation=perm)
 
     # Dump files
     if args.dumpbuild:
-        subprocess.run(f'{CAT_CMD} ./build/{args.test}/*',shell=True)
+        subprocess.run(f'{CAT_CMD} {args.wd}/build/{args.test}/*',shell=True)
 
     if args.link:
         if not args.codegen:
