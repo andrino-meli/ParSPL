@@ -83,6 +83,7 @@ int verify() {
 
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
+    __rt_seperator(); // for measuring
 #ifdef LSOLVE
     permute(core_id);
     lsolve(core_id);
