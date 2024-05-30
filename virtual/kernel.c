@@ -118,7 +118,7 @@ void diaginv_ltsolve(
 ){
     // iterate through the rows
     for(unsigned int i = 0; i < num_rows; i++){
-        unsigned int col = assigned_rows[i] - 1; // row is saved in mat as col
+        unsigned int col = n - assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
         //printf("diaginv_ltsolve: processing col %d, col+rowa %d\n",col,col+rowa);
         // dot product of col and bp
