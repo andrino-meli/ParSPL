@@ -193,18 +193,12 @@ class Collist(Tile,dict):
         self.reductiona = ra
 
     def codegen(self,s,h):
-        # then the core just supports in the reduction effort
-        # but not in the computation itself
-        if self.assigned_data() == 0:
-            lsolve = f'collist_lsolve(0, NULL, NULL, 0, NULL, NULL\
-, NULL, {self.reductiona[h]}, {self.reductionlen[h]})'
-            ltsolve = f'//empty'
-            return (lsolve,ltsolve), {}
         # define names of variables and functions
         cols = f'{self}_h{h}_assigned_cols'
         len_cols = f'{self}_h{h}_len_cols'
         ri = f'{self}_h{h}_ri'
         rx = f'{self}_h{h}_rx'
+        argstruct = f'{self}_h{h}_args'
 
         # collect all data together
         cols_dat = []
@@ -223,10 +217,18 @@ class Collist(Tile,dict):
         dat[len_cols] = list2array(len_cols_dat,len_cols,base=16)
         dat[ri] = list2array(ri_dat,ri,base=16)
         dat[rx] = np.array(rx_dat)
+        if self.assigned_data() == 0:
+            # in case the core process no data we only support the reduction effort
+            args = f'NULL, NULL, NULL, NULL, NULL, 0, 0, {self.reductiona[h]}, {self.reductionlen[h]}' 
+        else:
+            args = f'bp_tmp{h}, {cols}, {len_cols}, {ri}, {rx}, {len(cols_dat)}, {len(ri_dat)}, {self.reductiona[h]}, {self.reductionlen[h]}' 
+        dat[argstruct] = f'Collist {argstruct} = '+'{'+ args + '};\n'
 
-        lsolve = f'collist_lsolve({len(cols_dat)}, {cols}, {len_cols}, {len(ri_dat)}, {ri}, {rx}\
-, bp_tmp{h}, {self.reductiona[h]}, {self.reductionlen[h]})'
-        ltsolve = f'collist_ltsolve({len(cols_dat)}, {cols}, {len_cols}, {len(ri_dat)}, {ri}, {rx})'
+        lsolve = f'collist_lsolve(&{argstruct})'
+        if self.assigned_data() == 0:
+            ltsolve = f'//empty'
+        else:
+            ltsolve = f'collist_ltsolve(&{argstruct})'
         return (lsolve,ltsolve),dat
 
     def snum_fe(self):
@@ -381,13 +383,17 @@ class DiagInv(Tile):
 
     def codegen(self,s,h):
         assrow = f'{self}_h{h}_assigned_rows'
-        mat = f'{self}_diaginv'
+        mat = f'{self}_mat'
+        argstruct = f'{self}_h{h}_args'
 
-        lsolve = f'diaginv_lsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
-        ltsolve = f'diaginv_ltsolve({self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)})'
+        lsolve = f'diaginv_lsolve(&{argstruct})'
+        ltsolve = f'diaginv_ltsolve(&{argstruct})'
+        #{self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)}'
         dat = {}
+        args = f'{self.n}, {self.rowa}, {mat}, {assrow}, {len(self.assigned_rows)}'
         dat[assrow] = np.array(self.assigned_rows,dtype=np.uint16)
         dat[mat] = self.dense_inverse
+        dat[argstruct] = f'Diaginv {argstruct} = '+'{'+ args + '};\n'
         return (lsolve,ltsolve),dat
 
 class Fold(DiagInv,Tile):

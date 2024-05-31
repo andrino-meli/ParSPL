@@ -269,11 +269,6 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
             # call tiles codegen
             solve,dat = d.codegen(s,h)
             # process data
-            for k,v in dat.items():
-                if k in codedata:
-                    dprint(f'Discarding {k} for s{s}h{h}: duplicate')
-                else:
-                    codedata[k] = v
             codedata.update(dat)
             # process function call
             funcalls_fe[h].append(solve)
@@ -284,11 +279,6 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
             # call tiles codegen
             solve,dat = d.codegen(s,h)
             # process data
-            for k,v in dat.items():
-                if k in codedata:
-                    dprint(f'Discarding {k} for s{s}h{h}: duplicate')
-                else:
-                    codedata[k] = v
             codedata.update(dat)
             # process function call
             funcalls_bs[h].append(solve)
@@ -364,12 +354,18 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
 
     # dump data fo file
     with open(datafile,'w') as f:
-        #f.write('#include "runtime.h"\n\n')
+        f.write('#include "kernel.h"\n\n')
         for k,v in codedata.items():
             if isinstance(v,list):
                 v = list2array(v,k)
-            if isinstance(v,np.ndarray):
                 ndarrayToC(f,k,v)
+            elif isinstance(v,np.ndarray):
+                ndarrayToC(f,k,v)
+            elif isinstance(v,str):
+                v = v.split('=')
+                assert len(v) == 2
+                attr = f'__attribute__((aligned(8),section(".tcdm")))'
+                f.write(v[0] + attr + '=' + v[1]+'\n')
             else:
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
 
