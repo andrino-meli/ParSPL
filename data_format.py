@@ -6,6 +6,15 @@ import matplotlib
 import math
 from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette, list2array
 from bfloat16 import bfloat16
+from enum import Enum
+
+class Kernel(Enum):
+    COLLIST_LSOLVE = 1
+    COLLIST_LTSOLVE = 2
+    DIAGINV_LSOLVE = 3
+    DIAGINV_LTSOLVE = 4
+    SYNCH = 5
+    DIAG_INV_MULT = 6
 
 
 class Tile:
@@ -217,19 +226,19 @@ class Collist(Tile,dict):
         dat[len_cols] = list2array(len_cols_dat,len_cols,base=16)
         dat[ri] = list2array(ri_dat,ri,base=16)
         dat[rx] = np.array(rx_dat)
+        kbs = Kernel.COLLIST_LTSOLVE
         if self.assigned_data() == 0:
             # in case the core process no data we only support the reduction effort
             args = f'NULL, NULL, NULL, NULL, NULL, 0, 0, {self.reductiona[h]}, {self.reductionlen[h]}' 
+            args_fe,args_bs = None, argstruct
+            kfe = Kernel.SYNCH
         else:
             args = f'bp_tmp{h}, {cols}, {len_cols}, {ri}, {rx}, {len(cols_dat)}, {len(ri_dat)}, {self.reductiona[h]}, {self.reductionlen[h]}' 
+            kfe = Kernel.COLLIST_LSOLVE
+            args_fe,args_bs = argstruct, argstruct
         dat[argstruct] = f'Collist {argstruct} = '+'{'+ args + '};\n'
 
-        lsolve = f'collist_lsolve(&{argstruct})'
-        if self.assigned_data() == 0:
-            ltsolve = f'//empty'
-        else:
-            ltsolve = f'collist_ltsolve(&{argstruct})'
-        return (lsolve,ltsolve),dat
+        return (kfe,kbs),(args_fe,args_bs),dat
 
     def snum_fe(self):
         return 1
@@ -242,7 +251,7 @@ class Empty(Tile):
         return dist
 
     def codegen(self,s,h):
-        return (('// empty', '// empty'),{})
+        return (Kernel.SYNCH, Kernel.SYNCH),(None,None),{}
 
     def color_dict(self,sq_dict,color):
         return []
@@ -263,7 +272,7 @@ class Empty(Tile):
 class SynchBuffer(Empty):
 
     def codegen(self,s,h):
-        return (('// synchronization buffer', '// synchronization buffer'),{})
+        return (None,None),(None,None),{}
 
     def schedule(self,cores=range(HARTS)):
         dist = [SynchBuffer() for h in cores]
@@ -385,16 +394,12 @@ class DiagInv(Tile):
         assrow = f'{self}_h{h}_assigned_rows'
         mat = f'{self}_mat'
         argstruct = f'{self}_h{h}_args'
-
-        lsolve = f'diaginv_lsolve(&{argstruct})'
-        ltsolve = f'diaginv_ltsolve(&{argstruct})'
-        #{self.n},{self.rowa},{mat},{assrow},{len(self.assigned_rows)}'
         dat = {}
         args = f'{self.n}, {self.rowa}, {mat}, {assrow}, {len(self.assigned_rows)}'
         dat[assrow] = np.array(self.assigned_rows,dtype=np.uint16)
         dat[mat] = self.dense_inverse
         dat[argstruct] = f'Diaginv {argstruct} = '+'{'+ args + '};\n'
-        return (lsolve,ltsolve),dat
+        return (Kernel.DIAGINV_LSOLVE,Kernel.DIAGINV_LTSOLVE),(argstruct,argstruct),dat
 
 class Fold(DiagInv,Tile):
     REDUCES = True

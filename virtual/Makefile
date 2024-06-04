@@ -1,6 +1,6 @@
 CFLAGS 	?= -std=gnu99 -Wall
 VIRT_RT ?= runtime.h
-OBJ = build/workspace.o build/parspl.o build/main.o build/kernel.o build/virtual_main.o
+OBJ = build/workspace.o build/parspl.o build/main.o build/virtual_main.o
 
 .PHONY: clean all
 

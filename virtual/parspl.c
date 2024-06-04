@@ -1,6 +1,47 @@
 #include "workspace.h"
-#include "kernel.h"
+#include "parspl.h"
 #include "runtime.h"
+#include "scheduled_data.h"
+
+void solve(int core_id){
+    unsigned int argidx = argstruct_coreoffset[core_id];
+    for(unsigned int enumidx = enum_coreoffset[core_id]; enumidx < enum_coreoffset[core_id+1]; enumidx++) {
+        enum Kernel kern = enum_joined[enumidx];
+        #ifdef VERBOSE
+        printf("H%d:\tkernel %d\t,argidx %d\n",core_id,kern,argidx);
+        #endif
+        switch (kern) {
+            case COLLIST_LSOLVE:
+                collist_lsolve((Collist *) argstruct_joined[argidx]);
+                argidx++;
+                __rt_seperator();
+                break;
+            case COLLIST_LTSOLVE:
+                collist_ltsolve((Collist *) argstruct_joined[argidx]);
+                argidx++;
+                __rt_seperator();
+                break;
+            case DIAGINV_LSOLVE:
+                diaginv_lsolve((Diaginv *) argstruct_joined[argidx]);
+                argidx++;
+                __rt_seperator();
+                break;
+            case DIAGINV_LTSOLVE:
+                diaginv_ltsolve((Diaginv *) argstruct_joined[argidx]);
+                argidx++;
+                __rt_seperator();
+                break;
+            case DIAG_INV_MULT:
+                diag_inv_mult(core_id);
+                break;
+            case SYNCH:
+                __rt_seperator();
+                break;
+            default:
+                printf("Error no case taken for kernel");
+        }
+    }
+}
 
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy

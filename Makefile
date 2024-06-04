@@ -2,11 +2,15 @@ CC 		?= gcc
 CFLAGS 	?= -lpthread -std=gnu99
 VIRT_RT ?= runtime.h
 
-TEST ?= dummy_fullydense
+TEST ?= _HPC_3x3_H2
 
 .PHONY: clean link all
 
 all: link
+
+setup:
+	pip3 install argcomplete
+	argcomplete.autocomplete(parser)
 
 list:
 	# Available tests for linear systems:

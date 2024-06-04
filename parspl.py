@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 import numpy as np
 import argparse, os, json, sys, subprocess
+import argcomplete
 from scipy.sparse import csc_matrix
 import scipy.sparse as spa
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from enum import Enum
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
-from data_format import Collist, Tile, DiagInv, Empty, SynchBuffer
+from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer
 from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array
 import general
@@ -17,7 +18,6 @@ import general
 np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
-BARRIER = f'\t\t\t__rt_seperator();\n'
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -254,107 +254,59 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
     direc = f'{args.wd}/build/{args.test}'
     if not os.path.exists(direc):
         os.makedirs(direc)
-    callfile = f'{direc}/parspl.c'
     datafile = f'{direc}/scheduled_data.h'
-    bprint(f'\nCode generation into {callfile} and {datafile}.')
+    bprint(f'\nCode generation into {datafile}.')
     print(f"Synchronizing write access to bp at: {bp_sync}")
 
-    # Gather funcalls and data
-    funcalls_fe = [[] for i in range(HARTS)]
-    funcalls_bs = [[] for i in range(HARTS)]
-    codedata = {}
-    for s,dist in enumerate(schedule_fe):
-        assert(len(dist) == HARTS)
-        for h,d in enumerate(dist):
-            # call tiles codegen
-            solve,dat = d.codegen(s,h)
-            # process data
-            codedata.update(dat)
-            # process function call
-            funcalls_fe[h].append(solve)
+    # define space for data that defines what kernel to call, what arguments to pass and
+    #  what data to include
+    enum = [[] for i in range(HARTS+1)] # defines function call to kernel
+    argstruct = [[] for i in range(HARTS+1)] # defines passed argument in function call
+    codedata = {} # defines static data
 
-    for s,dist in enumerate(schedule_bs):
-        assert(len(dist) == HARTS)
-        for h,d in enumerate(dist):
-            # call tiles codegen
-            solve,dat = d.codegen(s,h)
-            # process data
-            codedata.update(dat)
-            # process function call
-            funcalls_bs[h].append(solve)
+    def generate_enum_list(for_fe=True):
+        for s,dist in enumerate(schedule_fe if for_fe else schedule_bs):
+            assert(len(dist) == HARTS)
+            for h,d in enumerate(dist):
+                # call tiles codegen
+                (kfe,kbs),(args_fe,args_bs),dat = d.codegen(s,h)
+                if for_fe:
+                    kernel,args = kfe, args_fe
+                else:
+                    kernel,args = kbs, args_bs
+                if kernel is None:
+                    continue
+                # process data
+                codedata.update(dat)
+                # process function call
+                enum[h].append(kernel.name)
+                # process function arguments
+                if args is not None:
+                    argstruct[h].append('&'+args)
+            # all other harts simply synchronize
+            enum[-1].append(Kernel.SYNCH.name)
 
-    with open(callfile,'w') as f:
-        f.write('#include "runtime.h"\n')
-        f.write('#include "kernel.h"\n')
-        f.write('#include "workspace.h"\n')
-        f.write('#include "scheduled_data.h"\n\n')
+    # generate data according to FE schedule
+    # TODO: make schedule generation function of what to run (ldlsolve, lsolve or ltsolve)
+    generate_enum_list(for_fe=True)
+    # process diag_inv_mult kernel
+    for h in range(HARTS):
+        enum[h].append(Kernel.DIAG_INV_MULT.name)
+    enum[-1].append(Kernel.SYNCH.name)
+    # process BS
+    generate_enum_list(for_fe=False)
 
-        # create call to lsolve
-        f.write('void lsolve(int core_id){\n')
-        f.write('\tswitch (core_id){\n')
-        for h in range(HARTS):
-            f.write(f'\t\tcase {h}:\n')
-            for s,(fun,_) in zip(range(synchsteps_fe),funcalls_fe[h]):
-                d = schedule_fe[s][h]
-                synchs = [str(i) for i in range(s,s+d.snum_fe()+1)]
-                if not isinstance(d,SynchBuffer):
-                    f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
-                    f.write(f'\t\t\t{fun};\n')
-                    f.write(BARRIER)
-                #else:
-                #    f.write(f'\t\t\t{fun};\n')
-            f.write(f'\t\t\tbreak;\n')
-        f.write(f'\t\tdefault:\n')
-        f.write(f'\t\t\t#ifdef PRINTF\n')
-        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.\\n");\n')
-        f.write(f'\t\t\t#endif\n')
-        for s in range(synchsteps_fe):
-            f.write(f'\t\t\t// synch step {s}\n')
-            f.write(BARRIER)
-        f.write(f'\t\t\tbreak;\n')
-        f.write('\t}\n}\n\n')
-
-        # synchronization count in FE
-        s_offset_bs = synchsteps_fe
-        # diagonal inverse multiplication
-        s_offset_bs += 1
-
-
-        # create call to ltsolve
-        f.write('void ltsolve(int core_id){\n')
-        f.write('\tswitch (core_id){\n')
-        for h in range(HARTS):
-            f.write(f'\t\tcase {h}:\n')
-            for s,(_,fun) in zip(range(synchsteps_bs),funcalls_bs[h]):
-                d = schedule_bs[s][h]
-                synchs = [str(i+s_offset_bs) for i in range(s,s+d.snum_bs()+1)]
-                if not isinstance(d,SynchBuffer):
-                    f.write(f'\t\t\t// synch step {" ".join(synchs)}\n')
-                    f.write(f'\t\t\t{fun};\n')
-                    f.write(BARRIER)
-                #else:
-                #    f.write(f'\t\t\t{fun};\n')
-            f.write(f'\t\t\tbreak;\n')
-        f.write(f'\t\tdefault:\n')
-        f.write(f'\t\t\t#ifdef PRINTF\n')
-        f.write(f'\t\t\tprintf("Error: wrong core count configuration in code generation.\\n");\n')
-        f.write(f'\t\t\t#endif\n')
-        for s in range(synchsteps_bs):
-            f.write(f'\t\t\t// synch step {s+s_offset_bs}\n')
-            f.write(BARRIER)
-        f.write(f'\t\t\tbreak;\n')
-        f.write('\t}\n}\n\n')
-
-        # create call to solve
-        f.write('void solve(int core_id){\n')
-        f.write('\tlsolve(core_id);\n')
-        f.write('\tdiag_inv_mult(core_id);\n')
-        f.write('\tltsolve(core_id);\n')
-        f.write('}\n')
 
     # dump data fo file
     with open(datafile,'w') as f:
-        f.write('#include "kernel.h"\n\n')
+        # enumerate definition for Kernel
+        enumdef = 'enum Kernel {'
+        for k in (Kernel):
+            enumdef += f'{k.name} = {k.value}, '
+        enumdef += '};\n\n'
+        f.write(enumdef)
+
+        # dump static data
         for k,v in codedata.items():
             if isinstance(v,list):
                 v = list2array(v,k)
@@ -368,6 +320,42 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
                 f.write(v[0] + attr + '=' + v[1]+'\n')
             else:
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
+
+        # merge argument data
+        args_coff = []
+        argstruct_joined = []
+        for v in argstruct:
+            args_coff.append(len(argstruct_joined))
+            argstruct_joined.extend(v)
+        args_coff.append(len(argstruct_joined))
+        # dump argument data
+        name = 'argstruct_coreoffset'
+        ndarrayToC(f,name,list2array(args_coff,name))
+        attr = f'__attribute__((aligned(4),section(".tcdm")))'
+        f.write(f'void* argstruct_joined [] {attr} = ' + '{\n')
+        for h,l in enumerate(argstruct):
+            f.write(f'// HART {h}\n')
+            for s in l:
+                f.write(f'(void *) {s},\n')
+        f.write('};\n\n')
+
+        # merge enum data
+        enum_coff = []
+        enum_joined = []
+        for v in enum:
+            enum_coff.append(len(enum_joined))
+            enum_joined.extend(v)
+        enum_coff.append(len(enum_joined))
+        # dump enum data
+        name = 'enum_coreoffset'
+        ndarrayToC(f,name,list2array(enum_coff,name))
+        attr = f'__attribute__((aligned(4),section(".tcdm")))'
+        f.write(f'enum Kernel enum_joined [] {attr} = ' + '{\n')
+        for h,l in enumerate(enum):
+            f.write(f'// HART {h}\n')
+            for s in l:
+                f.write(f'{s},\n')
+        f.write('};\n\n')
 
 
 def writeWorkspaceToFile(args,linsys,permutation=None):
@@ -430,7 +418,6 @@ def writeWorkspaceToFile(args,linsys,permutation=None):
             ndarrayToCH(fc,fh,'Perm',perm)
             ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
             # bp, bp_copy
-            #wprint("TODO: do not use in production: bp preset")
             bp = np.empty(linsys.n)
             #bp = b[permutation]
             ndarrayToCH(fc,fh,'bp',bp)
@@ -972,7 +959,6 @@ def main(args):
         bprint('\nLinking generated code to virtual verification environment')
         wd = args.wd
         links = [
-        f'ln -sf ../build/{args.test}/parspl.c {wd}/virtual/parspl.c',
         f'ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h',
         f'ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c',
         f'ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h' ]
@@ -1041,5 +1027,6 @@ parser.add_argument('--numerical_analysis', action='store_true',
 
 
 if __name__ == '__main__':
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
     main(args)

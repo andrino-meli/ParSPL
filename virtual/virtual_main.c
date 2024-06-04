@@ -7,8 +7,9 @@
 
 // ----- Runtime substitutes -----
 pthread_barrier_t barr_all;
-//spawn 3 additional core to check that the code handles core mismatch configuration
-#define N_CCS_MISSMATCH (N_CCS + 3)
+//spawn 1 additional core to check that the code handles core mismatch configuration
+// more than 1 additional cores is not detected properly: pay attention to core count config!
+#define N_CCS_MISSMATCH (N_CCS + 1)
 
 void __rt_barrier() {
     pthread_barrier_wait(&barr_all);

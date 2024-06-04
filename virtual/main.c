@@ -21,7 +21,6 @@
 
 #include "runtime.h"   // for runtime barrier
 #include "parspl.h"   // for lsolve, ltsolve, solve
-#include "kernel.h"   // for permute, permuteT
 #include "workspace.h" // for access to x, GOLD, GOLD_INV
 #include "print_float.h"
 
@@ -84,21 +83,9 @@ int verify() {
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
     __rt_seperator(); // for measuring
-#ifdef LSOLVE
-    permute(core_id);
-    lsolve(core_id);
-    permuteT(core_id);
-#endif
-#ifdef LTSOLVE
-    permute(core_id);
-    ltsolve(core_id);
-    permuteT(core_id);
-#endif
-#ifdef SOLVE
     permute(core_id);
     solve(core_id);
     permuteT(core_id);
-#endif
     if (core_id == 0) {
         return verify();
     }
