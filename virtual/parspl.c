@@ -38,7 +38,10 @@ void solve(int core_id){
                 __rt_seperator();
                 break;
             default:
+                #ifdef VERBOSE
                 printf("Error no case taken for kernel");
+                #endif
+                break;
         }
     }
 }
@@ -110,6 +113,7 @@ void diag_inv_mult(int core_id) {
             #ifdef PRINTF
             printf("Error: wrong core count configuration in code generation.");
             #endif
+            //None
             break;
     }
     __rt_seperator();
