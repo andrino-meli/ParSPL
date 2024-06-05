@@ -88,7 +88,7 @@ void diag_inv_mult(int core_id) {
     }
 }
 
-void diaginv_lsolve(Diaginv* s){
+void diaginv_lsolve(Diaginv const * s){
     // iterate through the rows
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int row = s->assigned_rows[i];
@@ -114,7 +114,7 @@ void diaginv_lsolve(Diaginv* s){
 }
 
 
-void diaginv_ltsolve(Diaginv* s){
+void diaginv_ltsolve(Diaginv const * s){
     // The first row in FE and the last column in BS can be neglected
     // as multiplication with it is just the identity.
     // Therefor we only process the rows 1..n and columns 0..n-1
@@ -143,7 +143,7 @@ void diaginv_ltsolve(Diaginv* s){
 }
 
 
-void collist_lsolve(Collist* s, int core_id) {
+void collist_lsolve(Collist const * s, int core_id) {
     // pos array to index over ri, rx
     // TODO: when streaming add an if condition to circumvent an empty stream
     unsigned int pos = 0; 
@@ -174,7 +174,7 @@ void collist_lsolve(Collist* s, int core_id) {
 }
 
 
-void collist_ltsolve(Collist* s) {
+void collist_ltsolve(Collist const * s) {
     // pos array to index over ri, rx
     int pos = 0;
     // work through rows

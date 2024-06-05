@@ -315,14 +315,14 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         for k,v in codedata.items():
             if isinstance(v,list):
                 v = list2array(v,k)
-                ndarrayToC(f,k,v)
+                ndarrayToC(f,k,v,const=True)
             elif isinstance(v,np.ndarray):
-                ndarrayToC(f,k,v)
+                ndarrayToC(f,k,v,const=True)
             elif isinstance(v,str):
                 v = v.split('=')
                 assert len(v) == 2
                 attr = f'__attribute__((aligned(8),section(".tcdm")))'
-                f.write(v[0] + attr + '=' + v[1]+'\n')
+                f.write(f'const {v[0]} {attr} ={v[1]}\n')
             else:
                 raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
 
@@ -335,9 +335,9 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         args_coff.append(len(argstruct_joined))
         # dump argument data
         name = 'argstruct_coreoffset'
-        ndarrayToC(f,name,list2array(args_coff,name))
+        ndarrayToC(f,name,list2array(args_coff,name),const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
-        f.write(f'void* argstruct_joined [] {attr} = ' + '{\n')
+        f.write(f'void * const argstruct_joined [] {attr} = ' + '{\n')
         for h,l in enumerate(argstruct):
             f.write(f'// HART {h}\n')
             for s in l:
@@ -353,9 +353,9 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         enum_coff.append(len(enum_joined))
         # dump enum data
         name = 'enum_coreoffset'
-        ndarrayToC(f,name,list2array(enum_coff,name))
+        ndarrayToC(f,name,list2array(enum_coff,name),const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
-        f.write(f'enum Kernel enum_joined [] {attr} = ' + '{\n')
+        f.write(f'const enum Kernel enum_joined [] {attr} = ' + '{\n')
         for h,l in enumerate(enum):
             f.write(f'// HART {h}\n')
             for s in l:
