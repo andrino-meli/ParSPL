@@ -13,7 +13,6 @@ typedef struct {
 } Diaginv;
 
 typedef struct {
-    double* bp_tmp;         // temporary bp vector
     uint16_t* assigned_cols;
     uint16_t* len_cols;   // length of each column
     uint16_t* ri;           // row index
@@ -50,16 +49,16 @@ void diaginv_ltsolve(Diaginv* s);
 void diag_inv_mult(int core_id);
 /* vector vector multiplication
  *   bp[] = bp[]*Dinv[]
- * TODO: use linalg files for this
+ *   clear out data
  */
 
 
-void collist_lsolve(Collist* s);
+void collist_lsolve(Collist* s, int core_id);
 /* 
  * Solves: Cx = bp
- *         and stores x in bp_tmp
+ *         and stores x in bp_tmp_h
  * Synchr: synchronizes cores
- * Copies: reduces bp_h0 up to bp_h10 into bp
+ * Copies: reduces bp_tmp_h0 up to bp_tmp_h7
  */
 
 void collist_ltsolve(Collist* s);

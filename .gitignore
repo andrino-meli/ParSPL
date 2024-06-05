@@ -6,3 +6,5 @@ build/*
 virtual/build/*
 src/_HPC*.json
 */tags
+tags
+virtual/kernel.h.inlined

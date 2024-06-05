@@ -229,11 +229,11 @@ class Collist(Tile,dict):
         kbs = Kernel.COLLIST_LTSOLVE
         if self.assigned_data() == 0:
             # in case the core process no data we only support the reduction effort
-            args = f'NULL, NULL, NULL, NULL, NULL, 0, 0, {self.reductiona[h]}, {self.reductionlen[h]}' 
+            args = f'NULL, NULL, NULL, NULL, 0, 0, {self.reductiona[h]}, {self.reductionlen[h]}' 
             args_fe,args_bs = None, argstruct
             kfe = Kernel.SYNCH
         else:
-            args = f'bp_tmp{h}, {cols}, {len_cols}, {ri}, {rx}, {len(cols_dat)}, {len(ri_dat)}, {self.reductiona[h]}, {self.reductionlen[h]}' 
+            args = f'{cols}, {len_cols}, {ri}, {rx}, {len(cols_dat)}, {len(ri_dat)}, {self.reductiona[h]}, {self.reductionlen[h]}' 
             kfe = Kernel.COLLIST_LSOLVE
             args_fe,args_bs = argstruct, argstruct
         dat[argstruct] = f'Collist {argstruct} = '+'{'+ args + '};\n'

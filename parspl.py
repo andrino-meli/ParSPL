@@ -287,14 +287,19 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
             enum[-1].append(Kernel.SYNCH.name)
 
     # generate data according to FE schedule
-    # TODO: make schedule generation function of what to run (ldlsolve, lsolve or ltsolve)
-    generate_enum_list(for_fe=True)
+    if args.case == 'solve' or args.case == 'lsolve':
+        print('generating schedule for FE')
+        generate_enum_list(for_fe=True)
     # process diag_inv_mult kernel
-    for h in range(HARTS):
-        enum[h].append(Kernel.DIAG_INV_MULT.name)
-    enum[-1].append(Kernel.SYNCH.name)
+    if args.case == 'solve':
+        print('generating schedule for inverse diagonal multiplication')
+        for h in range(HARTS):
+            enum[h].append(Kernel.DIAG_INV_MULT.name)
+        enum[-1].append(Kernel.SYNCH.name)
     # process BS
-    generate_enum_list(for_fe=False)
+    if args.case == 'solve' or args.case == 'ltsolve':
+        print('generating schedule for BS')
+        generate_enum_list(for_fe=False)
 
 
     # dump data fo file
@@ -358,7 +363,7 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         f.write('};\n\n')
 
 
-def writeWorkspaceToFile(args,linsys,permutation=None):
+def writeWorkspaceToFile(args,linsys,firstbp,permutation=None):
     global Kdata
     global Ldata
     global x_gold
@@ -374,7 +379,7 @@ def writeWorkspaceToFile(args,linsys,permutation=None):
         case = 'lsolve'
     elif args.ltsolve:
         case = 'ltsolve'
-    print(f'Dumping to {workh} and {workc}.\nIncluding golden model for **{case}**')
+    print(f'Dumping to {workh} and {workc}.\nIncluding golden model for **{args.case}**')
 
     try:
         fh = open(workh,'w')
@@ -383,8 +388,9 @@ def writeWorkspaceToFile(args,linsys,permutation=None):
         # includes and defines
         fc.write('#include "workspace.h"\n\n')
         fh.write('#include <stdint.h>\n')
-        fh.write(f'#define {case.upper()}\n')
+        fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
+        fh.write(f'#define FIRST_BP ({firstbp})\n\n')
 
         # create golden model: M @ x_golden = bp
         # Determine M matrix depending on the verification case
@@ -404,7 +410,7 @@ def writeWorkspaceToFile(args,linsys,permutation=None):
             print(M.toarray())
 
 
-        fc.write(f'// verification of {case}\n')
+        fc.write(f'// verification of {args.case}\n')
         # b
         b = M @ x_gold
         ndarrayToCH(fc,fh,'b',b)
@@ -434,9 +440,8 @@ def writeWorkspaceToFile(args,linsys,permutation=None):
         bp_cp = np.zeros(linsys.n)
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
         # temporary space for intermediate results before reduction
-        for h in range(HARTS):
-            bp_tmp = np.zeros(linsys.n)
-            ndarrayToCH(fc,fh,f'bp_tmp{h}',bp_tmp)
+        bp_tmp = np.zeros(HARTS*(linsys.n-firstbp))
+        ndarrayToCH(fc,fh,f'bp_tmp',bp_tmp)
     finally:
         fh.close()
         fc.close()
@@ -749,6 +754,14 @@ def main(args):
         DEBUG = True
         general.DEBUG = True
         plt.ion()
+    case = 'solve'
+    if args.lsolve:
+        case = 'lsolve'
+    elif args.ltsolve:
+        case = 'ltsolve'
+    elif args.solve:
+        case = 'solve'
+    args.case = case
 
     filename = f'{args.wd}/src/{args.test}.json'
     cutfile = f'{args.wd}/src/{args.test}.cut'
@@ -931,13 +944,6 @@ def main(args):
 
     if args.codegen:
         codegenSolver(args,schedule_fe,schedule_bs,cuts)
-        case = 'solve'
-        if args.lsolve:
-            case = 'lsolve'
-        elif args.ltsolve:
-            case = 'ltsolve'
-        elif args.solve:
-            case = 'solve'
 
         # check that permutation is actually permuting anything
         if perm is None:
@@ -947,7 +953,14 @@ def main(args):
         # swap: the linear sytem solver assumes perm is the row permutation and
         #       permT the column one
         #perm,permT = permT,perm
-        writeWorkspaceToFile(args,linsys,permutation=perm)
+        # determining firstbp to remove non-used reduction range
+        firstbp = linsys.n
+        for tl in tile_list:
+            for t in tl:
+                if t.REDUCES:
+                    firstbp = min(firstbp,t.rowa)
+        dprint(f'Using firstbp {firstbp} for code generation of bp_tmp_h')
+        writeWorkspaceToFile(args,linsys,firstbp,permutation=perm)
 
     # Dump files
     if args.dumpbuild:

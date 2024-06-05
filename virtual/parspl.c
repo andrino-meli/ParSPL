@@ -3,16 +3,18 @@
 #include "runtime.h"
 #include "scheduled_data.h"
 
+double * const bp_tmp_g = &bp_tmp[-N_CCS*FIRST_BP];
+
 void solve(int core_id){
     unsigned int argidx = argstruct_coreoffset[core_id];
     for(unsigned int enumidx = enum_coreoffset[core_id]; enumidx < enum_coreoffset[core_id+1]; enumidx++) {
         enum Kernel kern = enum_joined[enumidx];
         #ifdef VERBOSE
-        printf("H%d:\tkernel %d\t,argidx %d\n",core_id,kern,argidx);
+        //printf("H%d:\tkernel %d\t,argidx %d\n",core_id,kern,argidx);
         #endif
         switch (kern) {
             case COLLIST_LSOLVE:
-                collist_lsolve((Collist *) argstruct_joined[argidx]);
+                collist_lsolve((Collist *) argstruct_joined[argidx], core_id);
                 argidx++;
                 __rt_seperator();
                 break;
@@ -33,6 +35,7 @@ void solve(int core_id){
                 break;
             case DIAG_INV_MULT:
                 diag_inv_mult(core_id);
+                __rt_seperator();
                 break;
             case SYNCH:
                 __rt_seperator();
@@ -69,54 +72,20 @@ void permuteT(int core_id) {
 }
 
 
-// TODO: make lin sys library
-static inline void empty_out_bp_tmp(double* bp_tmp) {
-    for(int i = 0; i < LINSYS_N; i++) {
-        bp_tmp[i] = 0;
-    }
-}
-
 void diag_inv_mult(int core_id) {
     // multiply
-    if(core_id < N_CCS) {
-        for (int i = core_id; i < LINSYS_N; i += N_CCS) {
-            bp[i] *= Dinv[i];
-        }
+    for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+        bp[i] *= Dinv[i];
     }
     // clear out bp_tmp
-    switch (core_id){
-        case 0:
-            empty_out_bp_tmp(bp_tmp0);
-            break;
-        case 1:
-            empty_out_bp_tmp(bp_tmp1);
-            break;
-        case 2:
-            empty_out_bp_tmp(bp_tmp2);
-            break;
-        case 3:
-            empty_out_bp_tmp(bp_tmp3);
-            break;
-        case 4:
-            empty_out_bp_tmp(bp_tmp4);
-            break;
-        case 5:
-            empty_out_bp_tmp(bp_tmp5);
-            break;
-        case 6:
-            empty_out_bp_tmp(bp_tmp6);
-            break;
-        case 7:
-            empty_out_bp_tmp(bp_tmp7);
-            break;
-        default:
-            #ifdef PRINTF
-            printf("Error: wrong core count configuration in code generation.");
-            #endif
-            //None
-            break;
+    // Below for loop also works but potentially produces bank conflicts
+    //for(int i = 0; i < LINSYS_N-FIRST_BP; i++) {
+    //    bp_tmp[(LINSYS_N-FIRST_BP)*core_id + i] = 0;
+    //}
+    // interleaved acces version is presumably better against bank conflicts
+    for(int i = core_id; i < N_CCS*(LINSYS_N-FIRST_BP); i+=N_CCS) {
+        bp_tmp[i] = 0;
     }
-    __rt_seperator();
 }
 
 void diaginv_lsolve(Diaginv* s){
@@ -174,7 +143,7 @@ void diaginv_ltsolve(Diaginv* s){
 }
 
 
-void collist_lsolve(Collist* s){
+void collist_lsolve(Collist* s, int core_id) {
     // pos array to index over ri, rx
     // TODO: when streaming add an if condition to circumvent an empty stream
     unsigned int pos = 0; 
@@ -185,7 +154,9 @@ void collist_lsolve(Collist* s){
         double val = bp[col];
         // work through data in a column
         for(unsigned int j = 0; j < s->len_cols[i]; j++){
-            s->bp_tmp[s->ri[pos]] -= val*s->rx[pos];
+            // TODO: N_CCS interleaved data access is expensive: consider placing
+            //  bp_tmp differently in memory to make access continuous
+            bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * s->rx[pos];
             pos++;
         }
     }
@@ -194,8 +165,11 @@ void collist_lsolve(Collist* s){
     // reduce bp_tmp1 up to bp_tmp7 into bp
     for(int i = s->reductiona; i < s->reductiona + s->reductionlen; i++) {
         // adder tree
-        bp[i] += (bp_tmp0[i] + bp_tmp1[i]) + (bp_tmp2[i]+ bp_tmp3[i]) +
-                (bp_tmp4[i] + bp_tmp5[i]) + (bp_tmp6[i]+ bp_tmp7[i]);
+        // Assuming N_CCS = 8
+        bp[i] += ((bp_tmp_g[N_CCS*i+0] + bp_tmp_g[N_CCS*i+1]) +
+                  (bp_tmp_g[N_CCS*i+2] + bp_tmp_g[N_CCS*i+3])) +
+                 ((bp_tmp_g[N_CCS*i+4] + bp_tmp_g[N_CCS*i+5]) +
+                  (bp_tmp_g[N_CCS*i+6] + bp_tmp_g[N_CCS*i+7]));
     }
 }
 
