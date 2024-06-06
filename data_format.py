@@ -13,17 +13,19 @@ class Kernel(Enum):
     COLLIST_LTSOLVE = 2
     DIAGINV_LSOLVE = 3
     DIAGINV_LTSOLVE = 4
-    SYNCH = 5
-    DIAG_INV_MULT = 6
+    MAPPING_LSOLVE = 5
+    MAPPING_LTSOLVE = 6
+    SYNCH = 7
+    DIAG_INV_MULT = 8
 
 
 class Tile:
     ''' Abstract class to contain a tile. Inherit this by a tile class that is also a cointainer for data.'''
     def __init__(self,rowa,rowz,cola,colz):
         self.rowa = rowa # start row
-        self.rowz = rowz # end row
+        self.rowz = rowz # end row (inclusive!!)
         self.cola = cola # start col
-        self.colz = colz # end col
+        self.colz = colz # end col (inclusive!!)
 
     REDUCES = False # Does not reduce
 
@@ -75,12 +77,12 @@ class Tile:
         plotobjs = []
         if self.is_rect():
             color = 'b'
-            x = [self.cola-0.5,self.colz-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
-            y = [self.rowa-0.5,self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
+            x = [self.cola-0.5,self.colz+0.5,self.colz+0.5,self.cola-0.5,self.cola-0.5]
+            y = [self.rowa-0.5,self.rowa-0.5,self.rowz+0.5,self.rowz+0.5,self.rowa-0.5]
         else:
             color = 'lime'
-            x = [self.cola-0.5,self.colz-0.5,self.cola-0.5,self.cola-0.5]
-            y = [self.rowa-0.5,self.rowz-0.5,self.rowz-0.5,self.rowa-0.5]
+            x = [self.cola-0.5,self.colz+0.5,self.cola-0.5,self.cola-0.5]
+            y = [self.rowa-0.5,self.rowz+0.5,self.rowz+0.5,self.rowa-0.5]
         if self.is_diag():
             color = 'lime'
         lines = ax.plot(x,y,color=color,linewidth=1.5)
@@ -114,6 +116,24 @@ class Collist(Tile,dict):
 
     REDUCES = True
 
+    def tighten_bound(self):
+        # Update rowa,rowz,cola,colz according to actual represented data
+        cola = 10000000000000
+        colz = 0
+        rowa = 10000000000000
+        rowz = 0
+        for col,(Li,Lx) in self.items():
+            cola = min(cola,col)
+            colz = max(colz,col)
+            rowa = min(rowa,min(Li))
+            rowz = max(rowz,max(Li))
+        
+        self.cola = cola
+        self.colz = colz
+        self.rowa = rowa
+        self.rowz = rowz
+            
+
     def nnz(self):
         nnz = 0
         for k in self:
@@ -124,8 +144,8 @@ class Collist(Tile,dict):
     def insert(self,row,col,val):
         assert(val is not None)
         #print(f'Inserting {row},{col} at {self}')
-        assert(self.rowa <= row < self.rowz)
-        assert(self.cola <= col < self.colz)
+        assert(self.rowa <= row <= self.rowz)
+        assert(self.cola <= col <= self.colz)
         if col not in self:
             self[col] = ([row],[val])
         else:
@@ -189,8 +209,9 @@ class Collist(Tile,dict):
 
     def schedule_reduction(self,cores=range(HARTS)):
         # determine length
-        start = self.rowa
+        start = min(self.rowa,self.reduce_stop)
         stop = self.reduce_stop
+        print(f'Assigning reduction of bp[{start},{stop}) to {self}.')
         l = (stop-start)//len(cores)
         thr = (stop-start)%len(cores)
         self.reductionlen = [l+1 if h < thr else l for h in cores]
@@ -200,6 +221,7 @@ class Collist(Tile,dict):
         for h in cores[:-1]:
             ra.append(ra[-1]+self.reductionlen[h])
         self.reductiona = ra
+        dprint(f'Sched. Red. of {self} to start: {self.reductiona}, len: {self.reductionlen}')
 
     def codegen(self,s,h):
         # define names of variables and functions
@@ -279,6 +301,86 @@ class SynchBuffer(Empty):
         return dist
 
 
+class Mapping(Tile):
+    REDUCES = False
+    def __init__(self,collist,empty=False):
+        self.ri = []
+        self.ci = []
+        self.data = []
+        self.core_id = None
+        if empty:
+            return
+
+        assert(isinstance(collist,Collist))
+        for col,(Li,Lx) in collist.items():
+            self.ci.append(col)
+            self.ri.append(Li[0])
+            self.data.append(Lx[0])
+
+        self.rowa = min(self.ri)
+        self.rowz = max(self.ri)
+        self.cola = min(self.ci)
+        self.colz = max(self.ci)
+
+        assert len(self.ri) == len(self.ci) == len(self.data)
+
+    def assigned_copy(self,core_id):
+        tmp = Mapping(Collist(self.rowa,self.rowz,self.cola,self.colz),empty=True)
+        # copy data / obj refs
+        tmp.rowa = self.rowa
+        tmp.rowz = self.rowz
+        tmp.cola = self.cola
+        tmp.colz = self.colz
+        tmp.ri = self.ri
+        tmp.ci = self.ci
+        tmp.data = self.data
+        # add core_id
+        tmp.core_id = core_id
+        # assign data
+        l = (HARTS - 1 + tmp.nnz() - tmp.core_id) // HARTS
+        #print(f'{l=} {tmp.core_id=} {tmp.nnz()=}')
+        tmp.assdata = l
+        return tmp
+
+    def empty(self):
+        return len(self.data) == 0
+
+    def nnz(self):
+        return len(self.data)
+
+    def assigned_data(self):
+        return self.assdata
+
+    def schedule(self):
+        # TODO: allow for not all cores to work on a mapping
+        cores = range(HARTS)
+        assert self.core_id is None
+        dist = [self.assigned_copy(h) for h in cores]
+        for d,h in zip(dist,cores):
+            d.core_id = h
+        return dist
+
+    def codegen(self,s,h):
+        ri = f'{self}_ri'
+        ci = f'{self}_ci'
+        data = f'{self}_data'
+        argstruct = f'{self}_h{h}_args'
+        dat = {}
+        args = f'{ri}, {ci}, {data}, {self.assdata}'
+        dat[ri] = list2array(self.ri,ri,base=16)
+        dat[ci] = list2array(self.ci,ci,base=16)
+        dat[data] = np.array(self.data)
+        dat[argstruct] = f'Mapping {argstruct} = '+'{'+ args + '};\n'
+        return (Kernel.MAPPING_LSOLVE,Kernel.MAPPING_LTSOLVE),(argstruct,argstruct),dat
+
+    def color_dict(self, sq_dict, color):
+        patches = []
+        for r,c in zip(self.ri[self.core_id::HARTS],self.ci[self.core_id::HARTS]):
+            sq_dict[r][c].set_color(color)
+        return []
+
+
+
 class DiagInv(Tile):
     def __init__(self,collist,empty=False):
         assert(isinstance(collist,Collist))
@@ -291,7 +393,7 @@ class DiagInv(Tile):
         self.assigned_rows = []
 
         # get dimensions
-        self.n = self.rowz-self.rowa
+        self.n = self.rowz-self.rowa+1
         self.offset = self.rowa
         assert(self.is_diag())
         assert(self.n > 1) # 1x1 lower triag is just empty
@@ -383,7 +485,7 @@ class DiagInv(Tile):
         tmpr = list(cores) #H0, H1, H2
         tmpr.reverse()
         tmp.extend(tmpr) #H0 H1 H2 H2 H1 H0
-        for i,r in enumerate(range(self.rowz-self.rowa-1,0,-1)): # first col is empty
+        for i,r in enumerate(range(self.rowz-self.rowa,0,-1)): # first col is empty
             core = tmp[i%(2*len(cores))]
             dprint(f'Assigning: r{r} H{core}\t',end='')
             dist[core].assigned_rows.append(r)

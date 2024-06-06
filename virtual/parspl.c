@@ -33,6 +33,16 @@ void solve(int core_id){
                 argidx++;
                 __rt_seperator();
                 break;
+            case MAPPING_LSOLVE:
+                mapping_lsolve((Mapping *) argstruct_joined[argidx], core_id);
+                argidx++;
+                __rt_seperator();
+                break;
+            case MAPPING_LTSOLVE:
+                mapping_ltsolve((Mapping *) argstruct_joined[argidx], core_id);
+                argidx++;
+                __rt_seperator();
+                break;
             case DIAG_INV_MULT:
                 diag_inv_mult(core_id);
                 __rt_seperator();
@@ -79,11 +89,11 @@ void diag_inv_mult(int core_id) {
     }
     // clear out bp_tmp
     // Below for loop also works but potentially produces bank conflicts
-    //for(int i = 0; i < LINSYS_N-FIRST_BP; i++) {
-    //    bp_tmp[(LINSYS_N-FIRST_BP)*core_id + i] = 0;
+    //for(int i = 0; i < LAST_BP-FIRST_BP; i++) {
+    //    bp_tmp[(LAST_BP-FIRST_BP)*core_id + i] = 0;
     //}
     // interleaved acces version is presumably better against bank conflicts
-    for(int i = core_id; i < N_CCS*(LINSYS_N-FIRST_BP); i+=N_CCS) {
+    for(int i = core_id; i < N_CCS*(LAST_BP-FIRST_BP); i+=N_CCS) {
         bp_tmp[i] = 0;
     }
 }
@@ -191,3 +201,22 @@ void collist_ltsolve(Collist const * s) {
         bp[row] = val;
     }
 }
+
+void mapping_lsolve(Mapping const * s, int core_id) {
+    for(unsigned int i = 0; i < s->assigned_data; i++){
+        uint16_t row = s->ri[core_id+N_CCS*i];
+        uint16_t col = s->ci[core_id+N_CCS*i];
+        double val = s->data[core_id+N_CCS*i];
+        bp[row] -= bp[col]*val;
+    }
+}
+
+void mapping_ltsolve(Mapping const * s, int core_id) {
+    for(unsigned int i = 0; i < s->assigned_data; i++){
+        uint16_t col = s->ri[core_id+N_CCS*i];
+        uint16_t row = s->ci[core_id+N_CCS*i];
+        double val = s->data[core_id+N_CCS*i];
+        bp[row] -= bp[col]*val;
+    }
+}
+

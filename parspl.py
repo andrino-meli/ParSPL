@@ -10,7 +10,7 @@ from matplotlib.patches import Patch
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
-from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer
+from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping
 from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array
 import general
@@ -52,9 +52,7 @@ def tile_L(L,cuts):
     # compute cuts
     for i in range(numcuts):
         for j in range(i+1):
-            rowa,rowz = (cuts[i],cuts[i+1])
-            cola,colz = (cuts[j],cuts[j+1])
-            tiles[i][j] = Collist(cuts[i],cuts[i+1],cuts[j],cuts[j+1])
+            tiles[i][j] = Collist(cuts[i],cuts[i+1]-1,cuts[j],cuts[j+1]-1)
     # distribute data
     for col in range(n):
         for i in range(L.Lp[col],L.Lp[col+1]):
@@ -68,12 +66,29 @@ def assign_kernel_to_tile(tiles):
     bprint("\nAssigning Kernels to tiles:")
     numcuts = len(tiles)
 
+    def collist_is_mapping(cl):
+        assert(isinstance(cl,Collist))
+        rows = set() # set keeping track which rows are allready occupied
+        for col,(Li,Lx) in cl.items():
+            if len(Li) > 1: # check each column has only one element
+                return False
+            for el in Li:
+                if el in rows:
+                    return False
+            # add all rows that are present in curent col to rows set
+            rows.update(Li)
+        return True           
+
     # decide on kernel for diagonal tiles
     for i in range(numcuts):
         triag = tiles[i][i]
         assert(isinstance(triag,Tile))
         if triag.nnz() == 0:
             tiles[i][i] = Empty(0,0,0,0)
+        elif collist_is_mapping(triag):
+            print(f"MAPPING: {triag}")
+            raise NotImplementedError()
+            tiles[i][i] = Mapping(triag)
         elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
             print(f"DENSIFY: {triag}")
             tiles[i][i] = DiagInv(triag)
@@ -86,16 +101,35 @@ def assign_kernel_to_tile(tiles):
             #raise NotImplementedError()
 
     # decide on kernel for the rest
+    # only assign mappings to rows where all non-diag tiles are mappings as well:
+    # this is necessary for functional correctness (at least currently)
+    all_mappings = {}
     for i in range(1,numcuts):
+        mappings = []
         for j in range(i):
             rect = tiles[i][j]
             assert(isinstance(rect,Collist))
+            if rect.empty():
+                continue
+            if collist_is_mapping(rect):
+                mappings.append(j)
+            else:
+                # revert mappings list
+                if len(mappings) != 0:
+                    bprint(f'Ignoring Mapping in {mappings} due to {rect}.')
+                mappings = []
+                break
+        for j in mappings:
+            rect = tiles[i][j]
+            print(f'MAPPING: {rect}')
+            tiles[i][j] = Mapping(rect)
 
     if DEBUG:
         # DEBUG print tiles
         for til in tiles:
             for t in til:
                 print(f'{t}: {t.nnz()} nnz')
+
 
 def optimize_tiles(tiles,n):
     ''' Optimize and Merge tiles.
@@ -111,67 +145,62 @@ def optimize_tiles(tiles,n):
     # TODO: DAG scheduling of subblocks
     numcuts = len(tiles)
 
-    # merge all tiles below each other
+
+    # merge all Collist below each other
+    #  this basically ensures that collists are getting merged and scheduled ASAP
+    #  when they are beneave each other
+    #  otherwise we want them scheduled ALAP
+    # remove emtpy tiles
     for c in range(numcuts-1):
-        for r in range(c+2,numcuts):
-            a = tiles[c+1][c]
-            b = tiles[r][c]
-            dprint(f'merge into tile{c+1} {c} tile{r} {c}')
-            dprint(f'merge {b} into {a}')
-            a.merge(b)
+        tilecol = []
+        for r in range(c+1,numcuts):
+            t = tiles[r][c]
+            if t.empty():
+                tiles[r][c] = None
+                continue
+            if isinstance(t,Collist):
+                tilecol.append((t,r,c))
+        if len(tilecol) == 0:
+            continue
+        for t,r,c in tilecol[1:]:
+            dprint(f'merge {t} into {tilecol[0][0]}')
+            tilecol[0][0].merge(t)
             tiles[r][c] = None
 
-    # Collist tiles: only synchronize as much as necessary
-    #bp_next = n
-    #for c in reversed(range(numcuts-1)):
-    #    t = tiles[c+1][c]
-    #    t.set_bp_next(bp_next)
-    #    bp_next = t.rowa
-
-    #dprint("\n Determining bp_next")
-    #for c in range(numcuts-1):
-    #    t = tiles[c+1][c]
-    #    dprint(f'{t}: bp_next = {t.bp_next}\t bp reduction range = [{t.rowa}-{t.bp_next}]')
-    #dprint("\n")
-
-    # remove empty tiles
+    # tighten bounds on collist tiles
     for til in tiles:
-        for i in range(len(til)):
-            t = til[i]
-            if t is None or t.nnz() == 0:
-                dprint(f'Remove empty tile: {t}')
-                til[i] = None
+        for t in til:
+            if isinstance(t,Collist):
+                t.tighten_bound()
 
     # schedule tiles to synchronization steps:
     tile_list = []
-    for i in range(numcuts):
-        # add diagonal triangle first
-        t = tiles[i][i]
-        if t is not None and t.nnz() > 0:
-            tile_list.append([t])
-            tiles[i][i] = None
-        # add entire rectangle below the diagonal triangle
-        if i+1 < numcuts:
-            t = tiles[i+1][i]
+    for til in tiles:
+        for t in til:
             if t is not None and t.nnz() > 0:
                 tile_list.append([t])
-                tiles[i+1][i] = None
 
-    # assert we processed all tiles
-    for tr in tiles:
-        for t in tr:
-            assert(t == None)
+    # determining firstbp to remove non-used reduction range
+    firstbp = n
+    lastbp = 0 #exclusive
+    for tl in tile_list:
+        for t in tl:
+            if t.REDUCES:
+                firstbp = min(firstbp,t.rowa)
+                lastbp = max(lastbp,t.rowz+1)
 
     # assign reduction range from [self.rowa to self.reduce_stop)
-    stop = n
+    stop = lastbp
     for t in reversed(tile_list):
+        assert len(t) == 1
         t = t[0]
         if t.REDUCES:
             t.reduce_stop = stop
-            stop = t.rowa
-            dprint(f'Assigning reduction of bp[{t.rowa},{t.reduce_stop}) to {t}.')
+            if stop <= t.rowa:
+                wprint(f'{t} should be mergable into another Collist.')
+            stop = min(t.rowa,stop)
 
-    return tile_list
+    return tile_list,firstbp,lastbp
 
 def schedule_to_workers(tile_list):
     ''' Scheduling Triangles and Rectangles onto processor cores.
@@ -335,6 +364,7 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         args_coff.append(len(argstruct_joined))
         # dump argument data
         name = 'argstruct_coreoffset'
+        # TODO: select base for argstruct_joined: currently is uint8_t
         ndarrayToC(f,name,list2array(args_coff,name),const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
         f.write(f'void * const argstruct_joined [] {attr} = ' + '{\n')
@@ -353,6 +383,7 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         enum_coff.append(len(enum_joined))
         # dump enum data
         name = 'enum_coreoffset'
+        # TODO: select base for enum_coreoffset: currently is uint8_t
         ndarrayToC(f,name,list2array(enum_coff,name),const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
         f.write(f'const enum Kernel enum_joined [] {attr} = ' + '{\n')
@@ -363,7 +394,9 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
         f.write('};\n\n')
 
 
-def writeWorkspaceToFile(args,linsys,firstbp,permutation=None):
+def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
+    if lastbp is None:
+        lastbp = linsys.n
     global Kdata
     global Ldata
     global x_gold
@@ -391,6 +424,7 @@ def writeWorkspaceToFile(args,linsys,firstbp,permutation=None):
         fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
         fh.write(f'#define FIRST_BP ({firstbp})\n\n')
+        fh.write(f'#define LAST_BP ({lastbp})\n\n')
 
         # create golden model: M @ x_golden = bp
         # Determine M matrix depending on the verification case
@@ -440,7 +474,7 @@ def writeWorkspaceToFile(args,linsys,firstbp,permutation=None):
         bp_cp = np.zeros(linsys.n)
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
         # temporary space for intermediate results before reduction
-        bp_tmp = np.zeros(HARTS*(linsys.n-firstbp))
+        bp_tmp = np.zeros(HARTS*(lastbp-firstbp))
         ndarrayToCH(fc,fh,f'bp_tmp',bp_tmp)
     finally:
         fh.close()
@@ -922,7 +956,7 @@ def main(args):
         print("L matrix to cut & schedule:", L)
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
-        tile_list = optimize_tiles(tiles,linsys.n) #unstructure tiles
+        tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n) #unstructure tiles
         bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
         schedule_fe,schedule_bs = schedule_to_workers(tile_list)
         if args.schedule:
@@ -953,14 +987,8 @@ def main(args):
         # swap: the linear sytem solver assumes perm is the row permutation and
         #       permT the column one
         #perm,permT = permT,perm
-        # determining firstbp to remove non-used reduction range
-        firstbp = linsys.n
-        for tl in tile_list:
-            for t in tl:
-                if t.REDUCES:
-                    firstbp = min(firstbp,t.rowa)
-        dprint(f'Using firstbp {firstbp} for code generation of bp_tmp_h')
-        writeWorkspaceToFile(args,linsys,firstbp,permutation=perm)
+        print(f'Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h')
+        writeWorkspaceToFile(args,linsys,firstbp=firstbp,lastbp=lastbp,permutation=perm)
 
     # Dump files
     if args.dumpbuild:

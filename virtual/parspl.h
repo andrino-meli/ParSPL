@@ -23,6 +23,13 @@ typedef struct {
     const uint16_t reductionlen;   // reduction length off bp_tmpH
 } Collist;
 
+typedef struct {
+    const uint16_t * const ri;
+    const uint16_t * const ci;
+    const double * const data;
+    const uint16_t assigned_data;
+} Mapping;
+
 
 void permute(int core_id);
 
@@ -64,6 +71,16 @@ void collist_lsolve(Collist const * s, int core_id);
 void collist_ltsolve(Collist const * s);
 /* 
  * Solves: C^Tx = bp
+ */
+
+void mapping_lsolve(Mapping const * s, int core_id);
+/* 
+ * Solves: Mx = bp inplace
+ */
+
+void mapping_ltsolve(Mapping const * s, int core_id);
+/* 
+ * Solves: M^Tx = bp inplace
  */
 
 #endif
