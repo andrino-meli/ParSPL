@@ -82,10 +82,11 @@ int verify() {
 
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
-    __rt_seperator(); // for measuring
+    __rt_seperator(); //for clean measurement have it outside.
     permute(core_id);
     solve(core_id);
     permuteT(core_id);
+    __rt_seperator();
     if (core_id == 0) {
         return verify();
     }
