@@ -12,7 +12,7 @@ from bfloat16 import bfloat16
 from data_format import Csc, Triag
 from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping
 from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
-from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array
+from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array, list_flatten
 import general
 
 np.random.seed(0)
@@ -103,6 +103,7 @@ def assign_kernel_to_tile(tiles):
     # decide on kernel for the rest
     # only assign mappings to rows where all non-diag tiles are mappings as well:
     # this is necessary for functional correctness (at least currently)
+    MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS = 5
     all_mappings = {}
     for i in range(1,numcuts):
         mappings = []
@@ -111,9 +112,13 @@ def assign_kernel_to_tile(tiles):
             assert(isinstance(rect,Collist))
             if rect.empty():
                 continue
-            if collist_is_mapping(rect):
+            is_mapping = collist_is_mapping(rect)
+            is_worth_it = (rect.rowz-rect.rowa) > MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS
+            if is_mapping and is_worth_it:
                 mappings.append(j)
             else:
+                if is_mapping and not is_worth_it:
+                    print(f'Ignoring Mapping {rect} due to {MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS=}.')
                 # revert mappings list
                 if len(mappings) != 0:
                     bprint(f'Ignoring Mapping in {mappings} due to {rect}.')
@@ -131,8 +136,13 @@ def assign_kernel_to_tile(tiles):
                 print(f'{t}: {t.nnz()} nnz')
 
 
-def optimize_tiles(tiles,n):
-    ''' Optimize and Merge tiles.
+def optimize_tiles(tiles,n,args):
+    '''
+    Optimize and Merge tiles.
+    Do dependency tree based scheduling of tiles.
+    Remove empty dependencies.
+    Merge independent tiles on same optimization level.
+
     Parameters:
     n: dimension of matrix
     tiles (list of lists): matrix of tiles
@@ -168,19 +178,153 @@ def optimize_tiles(tiles,n):
             tiles[r][c] = None
 
     # tighten bounds on collist tiles
+    # -> reveals acctual dependencies
     for til in tiles:
         for t in til:
-            if isinstance(t,Collist):
+            fun = getattr(t, "tighten_bound", None)
+            if callable(fun):
                 t.tighten_bound()
 
-    # schedule tiles to synchronization steps:
+    # create tile_list by extracting tiles in order
     tile_list = []
     for til in tiles:
         for t in til:
             if t is not None and t.nnz() > 0:
                 tile_list.append([t])
 
-    # determining firstbp to remove non-used reduction range
+    # optimize using As Late As Possible Scheduling
+    if args.alap:
+        tile_list = list_flatten(tile_list)
+        # create dependency tree
+        bprint('Building and optimizing dependency tree')
+        dprint('==== Tiles ====')
+        for t in tile_list:
+            dprint(t)
+        class Node:
+            def __init__(self,tile):
+                self.tile = tile
+                self.child = set()
+                self.parent = set()
+                self.level = 0
+            def add_dependency(self,other):
+                if self is other:
+                    return
+                if self.is_child_of(other):
+                    self.parent.add(other)
+                if self.is_parent_of(other):
+                    self.child.add(other)
+            def is_parent_of(self,other):
+                if self.tile.rowa > other.tile.colz:
+                    return False
+                if self.tile.rowz < other.tile.cola:
+                    return False
+                return True
+            def is_child_of(self,other):
+                return other.is_parent_of(self)
+            def __repr__(self):
+                ch = ''; ph = ''
+                for c in self.child:
+                    ch += str(c.tile) + ', '
+                for p in self.parent:
+                    ph += str(p.tile) + ', '
+                return f'Node{self.tile} {self.level} -> child:[{ch}] parent:[{ph}]'
+        tree = [Node(t) for t in tile_list]
+        # build dependency tree
+        for s in tree:
+            for o in tree:
+                s.add_dependency(o)
+        dprint('==== Tree ====')
+        for t in tree:
+            dprint(t)
+
+        def reset_level(tree):
+            for t in tree:
+                t.level = 0
+
+        # show levels of DAG tree
+        def asap_level(tree):
+            def ASAP_level(node):
+                maxlevel = node.level
+                for c in node.child:
+                    c.level = max(node.level+1,c.level)
+                    maxlevel = max(maxlevel,ASAP_level(c))
+                return maxlevel
+            reset_level(tree)
+            maxlevel = 0
+            for root in tree:
+                if len(root.parent) == 0:
+                    newmax = ASAP_level(root)
+                    maxlevel = max(maxlevel,newmax)
+            level_list = [[] for i in range(maxlevel+1)]
+            for node in tree:
+                level_list[node.level].append(node)
+            return level_list
+
+        def alap_level(tree):
+            def ALAP_level(node):
+                minlevel = node.level
+                for p in node.parent:
+                    p.level = min(node.level-1,p.level)
+                    minlevel = min(minlevel,ALAP_level(p))
+                return minlevel
+            reset_level(tree)
+            minlevel = 0
+            for leave in tree:
+                if len(leave.child) == 0:
+                    minlevel = min(minlevel, ALAP_level(leave))
+            level_list = [[] for i in range(-minlevel+1)]
+            for node in tree:
+                level_list[-minlevel+node.level].append(node)
+            return level_list
+
+        def optimize_level(levels):
+            for i,l in enumerate(levels):
+                cl = None
+                tmp = []
+                for node in l:
+                    if isinstance(node.tile,Collist):
+                        if cl is None:
+                            cl = node
+                            continue
+                        else: # merge
+                            dprint(f'Merging on same DAG level: \n\t\t{cl}\n\t\t {node}')
+                            cl.child.update(node.child)
+                            cl.parent.update(node.parent)
+                            cl.tile.merge(node.tile)
+                            continue
+                    tmp.append(node)
+                if cl is not None:
+                    tmp.append(cl)
+                levels[i] = tmp
+            return levels
+
+        def print_levels(levels):
+            for i,l in enumerate(levels):
+                print(f'level {i:2}:')
+                for j,el in enumerate(l):
+                    print(f'{" "*5}| ',el)
+
+        if DEBUG:
+            print('\n\n ==== ASAP DAG tree levels ====')
+            levels = asap_level(tree)
+            assert len(tile_list) == len(list_flatten(levels))
+            print_levels(levels)
+
+            print('\n\n ==== ALAP DAG tree levels ====')
+            levels = alap_level(tree)
+            assert len(tile_list) == len(list_flatten(levels))
+            print_levels(levels)
+
+        print('\n\n ==== optimized DAG tree levels ====')
+        levels = alap_level(tree)
+        assert len(tile_list) == len(list_flatten(levels))
+        levels = optimize_level(levels)
+        tile_list = []
+        for l in levels:
+            for node in l:
+                tile_list.append([node.tile])
+
+    # determining firstbp/lastbp to remove non-used reduction range
     firstbp = n
     lastbp = 0 #exclusive
     for tl in tile_list:
@@ -956,7 +1100,7 @@ def main(args):
         print("L matrix to cut & schedule:", L)
         tiles = tile_L(L,cuts) # structured tiles
         assign_kernel_to_tile(tiles)
-        tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n) #unstructure tiles
+        tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n,args) #unstructure tiles
         bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
         schedule_fe,schedule_bs = schedule_to_workers(tile_list)
         if args.schedule:
@@ -1065,6 +1209,8 @@ parser.add_argument('--wd', type=str, default='.',
     help='Working directory.')
 parser.add_argument('--numerical_analysis', action='store_true',
     help='Working directory.')
+parser.add_argument('--alap', action='store_true',
+    help='As Late As possible scheduling in optimization.')
 
 
 if __name__ == '__main__':
