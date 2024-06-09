@@ -18,6 +18,7 @@ import general
 np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
+SSSR = True
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -599,6 +600,21 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         Dinv = 1/np.array(linsys.D)
         if permutation is not None:
             perm = np.array(permutation)
+            if SSSR:
+                def lenstart_schedule(total,name,lenmo=True):
+                    len_perm = []
+                    start_perm = []
+                    for h in range(HARTS):
+                        l = (HARTS - 1 + total - h) // HARTS
+                        if lenmo: #if length minus one
+                            start_perm.append(sum(len_perm)+h)
+                            len_perm.append(l-1) # frep/sssr length uses length - 1
+                        else:
+                            start_perm.append(sum(len_perm))
+                            len_perm.append(l)
+                    ndarrayToCH(fc,fh,f'start_{name}',list2array(start_perm,f'start_{name}',base=32))
+                    ndarrayToCH(fc,fh,f'len_{name}',list2array(len_perm,f'len_{name}',base=32))
+                lenstart_schedule(linsys.n,'perm')
             ndarrayToCH(fc,fh,'Perm',perm)
             ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
             # bp, bp_copy

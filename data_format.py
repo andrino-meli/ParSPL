@@ -336,10 +336,7 @@ class Mapping(Tile):
         tmp.data = self.data
         # add core_id
         tmp.core_id = core_id
-        # assign data
-        l = (HARTS - 1 + tmp.nnz() - tmp.core_id) // HARTS
-        #print(f'{l=} {tmp.core_id=} {tmp.nnz()=}')
-        tmp.assdata = l
+        tmp.assdata = None
         return tmp
 
     def empty(self):
@@ -356,8 +353,15 @@ class Mapping(Tile):
         cores = range(HARTS)
         assert self.core_id is None
         dist = [self.assigned_copy(h) for h in cores]
+        sume = 0
         for d,h in zip(dist,cores):
+            l = (HARTS - 1 + self.nnz() - h) // HARTS
             d.core_id = h
+            d.assdata = l
+            d.offset = sume
+            sume += l
+        # assign data
+        #print(f'{l=} {tmp.core_id=} {tmp.nnz()=}')
         return dist
 
     def codegen(self,s,h):
@@ -366,7 +370,7 @@ class Mapping(Tile):
         data = f'{self}_data'
         argstruct = f'{self}_h{h}_args'
         dat = {}
-        args = f'{ri}, {ci}, {data}, {self.assdata}'
+        args = f'&{ri}[{self.offset}], &{ci}[{self.offset}], &{data}[{self.offset}], {self.assdata}'
         dat[ri] = list2array(self.ri,ri,base=16)
         dat[ci] = list2array(self.ci,ci,base=16)
         dat[data] = np.array(self.data)
@@ -375,7 +379,8 @@ class Mapping(Tile):
 
     def color_dict(self, sq_dict, color):
         patches = []
-        for r,c in zip(self.ri[self.core_id::HARTS],self.ci[self.core_id::HARTS]):
+        for r,c in zip(self.ri[self.offset:self.offset+self.assdata],
+                       self.ci[self.offset:self.offset+self.assdata]):
             sq_dict[r][c].set_color(color)
         return []
 

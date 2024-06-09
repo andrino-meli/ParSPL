@@ -83,9 +83,15 @@ int verify() {
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
     __rt_seperator(); //for clean measurement have it outside.
+#ifdef SSSR
+//    __RT_SSSR_BLOCK_BEGIN
+#endif
     permute(core_id);
     solve(core_id);
     permuteT(core_id);
+#ifdef SSSR
+//    __RT_SSSR_BLOCK_END
+#endif
     __rt_seperator();
     if (core_id == 0) {
         return verify();

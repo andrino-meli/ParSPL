@@ -3,6 +3,10 @@
 #include "runtime.h"
 #include "scheduled_data.h"
 
+#ifdef __RT_SSSR_ENABLE
+#define SSSR
+#endif
+
 double * const bp_tmp_g = &bp_tmp[-N_CCS*FIRST_BP];
 
 void solve(int core_id){
@@ -54,6 +58,32 @@ void solve(int core_id){
 
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
+#ifdef SSSR
+void permute(int core_id) {
+    if (core_id < N_CCS){
+        __RT_SSSR_BLOCK_BEGIN
+        uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
+        uint16_t* perm_start = &Perm[start_perm[core_id]];
+        double* bp_start = &bp[start_perm[core_id]];
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+
+            __RT_SSSR_SCFGWI(%[b], 0,       __RT_SSSR_REG_IDX_BASE)
+            __RT_SSSR_SCFGWI(%[icfg], 0,     __RT_SSSR_REG_IDX_CFG)
+            __RT_SSSR_SCFGWI(%[perm], 0,     __RT_SSSR_REG_RPTR_INDIR)
+
+            __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
+            __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_WPTR_0)
+            "frep.o     %[len], 1, 1, 0      \n"
+            "fmv.d        ft1, ft0             \n"
+            :: [len]"r"(len), [bp]"r"(bp_start), [b]"r"(&b), [perm]"r"(perm_start),
+               [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            : "memory"
+        );
+    __RT_SSSR_BLOCK_END
+    }
+}
+#else
 void permute(int core_id) {
     //__rt_seperator(); for clean measurement have it outside.
     if (core_id < N_CCS){
@@ -62,9 +92,42 @@ void permute(int core_id) {
         }
     }
 }
+#endif
 
 // Permute back bp to x: x = P_ermute^T*bp
 // TODO: make lin sys library
+#ifdef SSSR
+void permuteT(int core_id) {
+    if (core_id < N_CCS){
+        __RT_SSSR_BLOCK_BEGIN
+        uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
+        uint16_t* perm_start = &Perm[start_perm[core_id]];
+        double* bp_start = &bp[start_perm[core_id]];
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+
+            __RT_SSSR_SCFGWI(%[x], 0,       __RT_SSSR_REG_IDX_BASE)
+            __RT_SSSR_SCFGWI(%[icfg], 0,     __RT_SSSR_REG_IDX_CFG)
+            __RT_SSSR_SCFGWI(%[perm], 0,     __RT_SSSR_REG_WPTR_INDIR)
+
+            __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
+            __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
+            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+            "csrr    zero,0x7c2                  \n" // __rt_barrier();
+            "csrr zero, mcycle                   \n"
+            "frep.o     %[len], 1, 1, 0      \n"
+            "fmv.d        ft0, ft1             \n"
+            :: [len]"r"(len), [bp]"r"(bp_start), [x]"r"(&x), [perm]"r"(perm_start),
+               [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            : "memory", "zero", "a6", "fa1"
+        );
+        __RT_SSSR_BLOCK_END
+    } else {
+        __rt_seperator();
+    }
+}
+#else
 void permuteT(int core_id) {
     __rt_seperator();
     if (core_id < N_CCS){
@@ -73,8 +136,49 @@ void permuteT(int core_id) {
         }
     }
 }
+#endif
 
 
+#ifdef SSSR
+void diag_inv_mult(int core_id) {
+    // multiply
+    __RT_SSSR_BLOCK_BEGIN
+    uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
+    double* bp_start = &bp[start_perm[core_id]];
+    double* dinv_start = &Dinv[start_perm[core_id]];
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
+
+        __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
+        __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
+        __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
+        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+        "csrr    zero,0x7c2                  \n" // __rt_barrier();
+        "csrr zero, mcycle                   \n"
+        "frep.o     %[len], 1, 1, 0      \n"
+        "fmul.d  ft0, ft1, ft2             \n"
+        //bp[i] *= Dinv[i];
+        :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start), [stride]"r"(8)
+        : "memory", "zero", "a6", "fa1"
+    );
+    // clear out bp_tmp
+    //__rt_fpu_fence_full(); //avoidable by streaming on ft1
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
+        __RT_SSSR_SCFGWI(%[tmp], 1,       __RT_SSSR_REG_WPTR_0)
+        "frep.o     %[len], 1, 1, 0      \n"
+        "fmv.d        ft1, %[zero]             \n"
+        // bp_tmp[i] = 0;
+        :: [len]"r"(LAST_BP-FIRST_BP-1), [tmp]"r"(&bp_tmp[core_id]),
+           [stride]"r"(8*N_CCS), [zero]"f"(0.0)
+        : "memory"
+    );
+    __RT_SSSR_BLOCK_END
+}
+#else
 void diag_inv_mult(int core_id) {
     // multiply
     __rt_seperator();
@@ -91,7 +195,10 @@ void diag_inv_mult(int core_id) {
         bp_tmp[i] = 0;
     }
 }
+#endif
 
+
+#ifdef SSSR
 void diaginv_lsolve(Diaginv const * s){
     // iterate through the rows
     __rt_seperator();
@@ -117,6 +224,33 @@ void diaginv_lsolve(Diaginv const * s){
         bp[s->rowa + row] = bp_cp[s->rowa + row];
     }
 }
+#else
+void diaginv_lsolve(Diaginv const * s){
+    // iterate through the rows
+    __rt_seperator();
+    for(unsigned int i = 0; i < s->num_rows; i++){
+        unsigned int row = s->assigned_rows[i];
+        //printf("diaginv_lsolve: processing row %d, row+rowa %d\n",row,row+s->rowa);
+        // dot product of row and bp
+        double val = 0;
+        for(unsigned col = 0; col <= row; col++){
+            // TODO: currently all harts have the same access pattern to bp
+            //       have to reverse to avoid tcdm access congestion
+            val += s->mat[row * s->n + col] * bp[s->rowa + col];
+        }
+        // update bp_cp[row]
+        bp_cp[s->rowa + row] = val;
+    }
+    // synchronize
+    __rt_seperator();
+    // update bp from bp_cp
+    // TODO: indirection copy
+    for(unsigned int i = 0; i < s->num_rows; i++){
+        unsigned int row = s->assigned_rows[i];
+        bp[s->rowa + row] = bp_cp[s->rowa + row];
+    }
+}
+#endif
 
 
 void diaginv_ltsolve(Diaginv const * s){
@@ -181,6 +315,7 @@ void collist_lsolve(Collist const * s, int core_id) {
 }
 
 
+#ifdef SSSR
 void collist_ltsolve(Collist const * s) {
     // pos array to index over ri, rx
     int pos = 0;
@@ -199,23 +334,85 @@ void collist_ltsolve(Collist const * s) {
         bp[row] = val;
     }
 }
+#else
+void collist_ltsolve(Collist const * s) {
+    // pos array to index over ri, rx
+    int pos = 0;
+    // work through rows
+    __rt_seperator();
+    for(unsigned int i = 0; i < s->num_cols; i++){
+        unsigned int row = s->assigned_cols[i];
+        // work through data in a row: read val
+        double val = bp[row];
+        // update val
+        for(unsigned int j = 0; j < s->len_cols[i]; j++){
+            val -= bp[s->ri[pos]]*s->rx[pos];
+            pos++;
+        }
+        // write back
+        bp[row] = val;
+    }
+}
+#endif
 
+#ifdef SSSR
+// sadly we would need 4 SSSR streams to make this work fully!
+// instead we stream twice and store intermed. in bp_cph
+void mapping_lsolve(Mapping const * s, int core_id) {
+    uint32_t len = s->assigned_data -1;
+    double* bp_cph = &bp_cp[start_perm[core_id]];
+    __RT_SSSR_BLOCK_BEGIN
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
+        __RT_SSSR_SCFGWI(%[bp], 31,       __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[stride], 31,    __RT_SSSR_REG_STRIDE_0)
+        // bp_cph[..] =  bp[col]*val
+        __RT_SSSR_SCFGWI(%[bp_cp], 0,     __RT_SSSR_REG_WPTR_0)
+        __RT_SSSR_SCFGWI(%[col], 1,       __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[val], 2,       __RT_SSSR_REG_RPTR_0)
+        "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
+        "mv      zero, a6                 \n" //_rt_fpu_fence_full();
+        "csrr    zero,0x7c2               \n" // __rt_barrier();
+        "csrr zero, mcycle                   \n"
+        "frep.o     %[len], 1, 1, 0       \n"
+        "fmul.d ft0,ft1,ft2               \n"
+        // bp[row] = bp[row] - bp_cph[..]
+        // avoid fpu barrier by changing ft0 write stream to read stream
+        //__RT_SSSR_SCFGWI(%[row], 1,     __RT_SSSR_REG_WPTR_INDIR)
+        //__RT_SSSR_SCFGWI(%[row], 2,     __RT_SSSR_REG_RPTR_INDIR)
+        //__RT_SSSR_SCFGWI(%[bp_cp], 0,   __RT_SSSR_REG_RPTR_0)
+        //"frep.o     %[len], 1, 1, 0     \n"
+        //"fsub.d ft1,ft2,ft0             \n"
+        :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ci),
+           [val]"r"(s->data), [row]"r"(s->ri),
+           [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+        : "memory", "zero", "a6", "fa1"
+    );
+    __RT_SSSR_BLOCK_END
+    for(int i = 0; i < s->assigned_data; i++){
+        uint16_t row = s->ri[i];
+        bp[row] -= bp_cph[i];
+    }
+}
+#else
 void mapping_lsolve(Mapping const * s, int core_id) {
     __rt_seperator();
     for(unsigned int i = 0; i < s->assigned_data; i++){
-        uint16_t row = s->ri[core_id+N_CCS*i];
-        uint16_t col = s->ci[core_id+N_CCS*i];
-        double val = s->data[core_id+N_CCS*i];
+        uint16_t row = s->ri[i];
+        uint16_t col = s->ci[i];
+        double val = s->data[i];
         bp[row] -= bp[col]*val;
     }
 }
+#endif
 
 void mapping_ltsolve(Mapping const * s, int core_id) {
     __rt_seperator();
     for(unsigned int i = 0; i < s->assigned_data; i++){
-        uint16_t col = s->ri[core_id+N_CCS*i];
-        uint16_t row = s->ci[core_id+N_CCS*i];
-        double val = s->data[core_id+N_CCS*i];
+        uint16_t col = s->ri[i];
+        uint16_t row = s->ci[i];
+        double val = s->data[i];
         bp[row] -= bp[col]*val;
     }
 }
