@@ -151,12 +151,12 @@ void diag_inv_mult(int core_id) {
         __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
 
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
-        __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
-        __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
         "mv      zero, a6                    \n" //_rt_fpu_fence_full();
         "csrr    zero,0x7c2                  \n" // __rt_barrier();
         "csrr zero, mcycle                   \n"
+        __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
+        __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
         "frep.o     %[len], 1, 1, 0      \n"
         "fmul.d  ft0, ft1, ft2             \n"
         //bp[i] *= Dinv[i];
@@ -215,14 +215,30 @@ void diaginv_lsolve(Diaginv const * s){
         // update bp_cp[row]
         bp_cp[s->rowa + row] = val;
     }
-    // synchronize
-    __rt_seperator();
     // update bp from bp_cp
-    // TODO: indirection copy
-    for(unsigned int i = 0; i < s->num_rows; i++){
-        unsigned int row = s->assigned_rows[i];
-        bp[s->rowa + row] = bp_cp[s->rowa + row];
-    }
+    __RT_SSSR_BLOCK_BEGIN
+    uint32_t len = s->num_rows-1;
+    double* bp_start = &bp[s->rowa];
+    double* bp_cp_start = &bp_cp[s->rowa];
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
+
+        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_WPTR_INDIR)
+        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+        "csrr    zero,0x7c2                  \n" // __rt_barrier();
+        "csrr zero, mcycle                   \n"
+        __RT_SSSR_SCFGWI(%[row], 1,    __RT_SSSR_REG_RPTR_INDIR)
+        "frep.o     %[len], 1, 1, 0      \n"
+        "fmv.d  ft0, ft1                 \n"
+        //bp[i] *= Dinv[i];
+        :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start),
+           [row]"r"(s->assigned_rows)
+        : "memory", "zero", "a6", "fa1"
+    );
+    __RT_SSSR_BLOCK_END
 }
 #else
 void diaginv_lsolve(Diaginv const * s){
@@ -253,6 +269,53 @@ void diaginv_lsolve(Diaginv const * s){
 #endif
 
 
+#ifdef SSSR
+void diaginv_ltsolve(Diaginv const * s){
+    // The first row in FE and the last column in BS can be neglected
+    // as multiplication with it is just the identity.
+    // Therefor we only process the rows 1..n and columns 0..n-1
+    // iterate through the rows
+    __rt_seperator();
+    for(unsigned int i = 0; i < s->num_rows; i++){
+        unsigned int col = s->n - s->assigned_rows[i] - 1; // row is saved in mat as col
+                                        // -1 as we process 0..n-1
+        //printf("diaginv_ltsolve: processing col %d, col+rowa %d\n",col,col+rowa);
+        // dot product of col and bp
+        double val = 0;
+        for(unsigned int row = col; row < s->n; row++){
+            val += s->mat[row * s->n + col] * bp[s->rowa + row];
+            //printf("col %d row %d   s->mat[%d] bp[%d]\t",col, row, row*s->n+col,s->rowa + row);
+            //printf("mat=%f\tbp=%f\tval=%f\n", s->mat[row * s->n + col], bp[s->rowa + row], val);
+        }
+        // update bp_cp[col]
+        bp_cp[s->rowa + col] = val;
+    }
+    // update bp from bp_cp
+    __RT_SSSR_BLOCK_BEGIN
+    uint32_t len = s->num_rows-1;
+    double* bp_start = &bp[s->rowa-1];
+    double* bp_cp_start = &bp_cp[s->rowa-1];
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
+
+        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_WPTR_INDIR)
+        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+        "csrr    zero,0x7c2                  \n" // __rt_barrier();
+        "csrr zero, mcycle                   \n"
+        __RT_SSSR_SCFGWI(%[row], 1,    __RT_SSSR_REG_RPTR_INDIR)
+        "frep.o     %[len], 1, 1, 0      \n"
+        "fmv.d  ft0, ft1                 \n"
+        //bp[i] *= Dinv[i];
+        :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start),
+           [row]"r"(s->assigned_rows)
+        : "memory", "zero", "a6", "fa1"
+    );
+    __RT_SSSR_BLOCK_END
+}
+#else
 void diaginv_ltsolve(Diaginv const * s){
     // The first row in FE and the last column in BS can be neglected
     // as multiplication with it is just the identity.
@@ -281,6 +344,7 @@ void diaginv_ltsolve(Diaginv const * s){
         bp[s->rowa + row] = bp_cp[s->rowa + row];
     }
 }
+#endif
 
 
 void collist_lsolve(Collist const * s, int core_id) {
@@ -368,32 +432,34 @@ void mapping_lsolve(Mapping const * s, int core_id) {
         __RT_SSSR_SCFGWI(%[bp], 31,       __RT_SSSR_REG_IDX_BASE)
         __RT_SSSR_SCFGWI(%[stride], 31,    __RT_SSSR_REG_STRIDE_0)
         // bp_cph[..] =  bp[col]*val
-        __RT_SSSR_SCFGWI(%[bp_cp], 0,     __RT_SSSR_REG_WPTR_0)
-        __RT_SSSR_SCFGWI(%[col], 1,       __RT_SSSR_REG_RPTR_INDIR)
-        __RT_SSSR_SCFGWI(%[val], 2,       __RT_SSSR_REG_RPTR_0)
         "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
         "mv      zero, a6                 \n" //_rt_fpu_fence_full();
         "csrr    zero,0x7c2               \n" // __rt_barrier();
         "csrr zero, mcycle                   \n"
+        __RT_SSSR_SCFGWI(%[col], 1,       __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[bp_cp], 0,     __RT_SSSR_REG_WPTR_0)
+        __RT_SSSR_SCFGWI(%[val], 2,       __RT_SSSR_REG_RPTR_0)
         "frep.o     %[len], 1, 1, 0       \n"
         "fmul.d ft0,ft1,ft2               \n"
         // bp[row] = bp[row] - bp_cph[..]
         // avoid fpu barrier by changing ft0 write stream to read stream
-        //__RT_SSSR_SCFGWI(%[row], 1,     __RT_SSSR_REG_WPTR_INDIR)
-        //__RT_SSSR_SCFGWI(%[row], 2,     __RT_SSSR_REG_RPTR_INDIR)
-        //__RT_SSSR_SCFGWI(%[bp_cp], 0,   __RT_SSSR_REG_RPTR_0)
-        //"frep.o     %[len], 1, 1, 0     \n"
-        //"fsub.d ft1,ft2,ft0             \n"
+        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[row], 1,     __RT_SSSR_REG_WPTR_INDIR)
+        "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
+        "mv      zero, a6                 \n" //_rt_fpu_fence_full();
+        __RT_SSSR_SCFGWI(%[bp_cp], 2,   __RT_SSSR_REG_RPTR_0)
+        "frep.o     %[len], 1, 1, 0     \n"
+        "fsub.d ft1,ft0,ft2             \n"
         :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ci),
            [val]"r"(s->data), [row]"r"(s->ri),
            [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
         : "memory", "zero", "a6", "fa1"
     );
     __RT_SSSR_BLOCK_END
-    for(int i = 0; i < s->assigned_data; i++){
-        uint16_t row = s->ri[i];
-        bp[row] -= bp_cph[i];
-    }
+    //for(int i = 0; i < s->assigned_data; i++){
+    //    uint16_t row = s->ri[i];
+    //    bp[row] -= bp_cph[i];
+    //}
 }
 #else
 void mapping_lsolve(Mapping const * s, int core_id) {
@@ -416,4 +482,3 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
         bp[row] -= bp[col]*val;
     }
 }
-
