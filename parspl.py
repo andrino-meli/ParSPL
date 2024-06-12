@@ -550,7 +550,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         os.makedirs(direc)
     workh = f'{direc}/workspace.h'
     workc = f'{direc}/workspace.c'
-    goldenh = f'{direc}/golden.h'
+    goldenh = f'{direc}/olden.h'
     bprint(f'\nCreating workspace')
     case = 'solve'
     if args.lsolve:
@@ -618,7 +618,9 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             ndarrayToCH(fc,fh,'Perm',perm)
             ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
             # bp, bp_copy
-            bp = np.empty(linsys.n)
+            RANGE = 5
+            exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+            bp = np.exp(exponent)
             #bp = b[permutation]
             ndarrayToCH(fc,fh,'bp',bp)
             # Dinv
@@ -629,9 +631,13 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             # Dinv
             ndarrayToCH(fc,fh,'Dinv',Dinv)
         # solution vector x
-        x = np.empty(linsys.n)
+        # TODO: setting to random is only used for verification / testing
+        RANGE = 5
+        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        x = np.exp(exponent)
         ndarrayToCH(fc,fh,'x',x)
-        bp_cp = np.zeros(linsys.n)
+        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        bp_cp = np.exp(exponent)
         ndarrayToCH(fc,fh,'bp_cp',bp_cp)
         # temporary space for intermediate results before reduction
         bp_tmp = np.zeros(HARTS*(lastbp-firstbp))

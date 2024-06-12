@@ -26,11 +26,6 @@
 
 #define TOL (1e2) // require the error to be less than 1%
 
-void __rt_seperator() {
-    __rt_fpu_fence_full();
-    __rt_barrier();
-    __rt_get_timer();
-}
 
 int verify() {
     double maxerr = 0;
@@ -82,7 +77,7 @@ int verify() {
 
 int smain(uint32_t core_id, uint32_t core_num) {
 // for verification purposes have different solve stages.
-    __rt_seperator(); //for clean measurement have it outside.
+    __RT_SEPERATOR //for clean measurement have it outside.
 #ifdef SSSR
 //    __RT_SSSR_BLOCK_BEGIN
 #endif
@@ -92,7 +87,7 @@ int smain(uint32_t core_id, uint32_t core_num) {
 #ifdef SSSR
 //    __RT_SSSR_BLOCK_END
 #endif
-    __rt_seperator();
+    __RT_SEPERATOR
     if (core_id == 0) {
         return verify();
     }
