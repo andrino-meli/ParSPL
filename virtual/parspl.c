@@ -398,10 +398,10 @@ void collist_lsolve(Collist const * s, int core_id) {
             val = bp[col]; 
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
-             __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
-             __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
+             __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_WPTR_INDIR)
+             __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_RPTR_INDIR)
             "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+            "fnmsub.d  ft1, %[val], ft2, ft0          \n"
             : [val]"+f"(val)
             : [ilen]"r"(s->len_cols[i]-1), [ri]"r"(&s->ri[pos])
             : "memory");
