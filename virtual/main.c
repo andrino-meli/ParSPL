@@ -26,6 +26,10 @@
 
 #define TOL (1e2) // require the error to be less than 1%
 
+#ifdef __RT_SSSR_ENABLE
+#define SSSR
+#endif
+
 
 int verify() {
     double maxerr = 0;
@@ -75,18 +79,23 @@ int verify() {
 
 
 
-int smain(uint32_t core_id, uint32_t core_num) {
+//int smain(uint32_t core_id, uint32_t core_num) {
+int smain(uint32_t core_id) {
 // for verification purposes have different solve stages.
     __RT_SEPERATOR //for clean measurement have it outside.
 #ifdef SSSR
-//    __RT_SSSR_BLOCK_BEGIN
+    if (core_id < N_CCS) {
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
+            __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
+            :: [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            : "memory"
+        );
+    }
 #endif
     permute(core_id);
     solve(core_id);
     permuteT(core_id);
-#ifdef SSSR
-//    __RT_SSSR_BLOCK_END
-#endif
     __RT_SEPERATOR
     if (core_id == 0) {
         return verify();

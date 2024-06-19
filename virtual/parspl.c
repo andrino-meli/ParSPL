@@ -7,7 +7,8 @@
 #define SSSR
 #endif
 
-double * const bp_tmp_g = &bp_tmp[-N_CCS*FIRST_BP];
+double * const bp_avoid_wall_bound_err = bp_tmp;
+double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
 
 void solve(int core_id){
     unsigned int argidx = argstruct_coreoffset[core_id];
@@ -69,16 +70,13 @@ void permute(int core_id) {
             __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
 
             __RT_SSSR_SCFGWI(%[b], 0,       __RT_SSSR_REG_IDX_BASE)
-            __RT_SSSR_SCFGWI(%[icfg], 0,     __RT_SSSR_REG_IDX_CFG)
             __RT_SSSR_SCFGWI(%[perm], 0,     __RT_SSSR_REG_RPTR_INDIR)
 
-            __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
             __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_WPTR_0)
             "frep.o     %[len], 1, 1, 0      \n"
             "fmv.d        ft1, ft0             \n"
-            :: [len]"r"(len), [bp]"r"(bp_start), [b]"r"(&b), [perm]"r"(perm_start),
-               [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
-            : "memory"
+            :: [len]"r"(len), [bp]"r"(bp_start), [b]"r"(&b), [perm]"r"(perm_start)
+            : "memory", "t0"
         );
     __RT_SSSR_BLOCK_END
     }
@@ -106,9 +104,7 @@ void permuteT(int core_id) {
         asm volatile(
             __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
             __RT_SSSR_SCFGWI(%[x], 0,        __RT_SSSR_REG_IDX_BASE)
-            __RT_SSSR_SCFGWI(%[icfg], 0,     __RT_SSSR_REG_IDX_CFG)
             __RT_SSSR_SCFGWI(%[perm], 0,     __RT_SSSR_REG_WPTR_INDIR)
-            __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
             "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
             "mv      zero, a6                    \n" //_rt_fpu_fence_full();
             "csrr    zero,0x7c2                  \n" // __rt_barrier();
@@ -116,8 +112,7 @@ void permuteT(int core_id) {
             "csrr zero, mcycle                   \n"
             "frep.o     %[len], 1, 1, 0      \n"
             "fmv.d        ft0, ft1             \n"
-            :: [len]"r"(len), [bp]"r"(bp_start), [x]"r"(&x), [perm]"r"(perm_start),
-               [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            :: [len]"r"(len), [bp]"r"(bp_start), [x]"r"(&x), [perm]"r"(perm_start)
             : "memory", "zero", "a6", "fa1"
         );
         __RT_SSSR_BLOCK_END
@@ -146,7 +141,6 @@ void diag_inv_mult(int core_id) {
     double* dinv_start = &Dinv[start_perm[core_id]];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
 
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
@@ -158,20 +152,20 @@ void diag_inv_mult(int core_id) {
         "frep.o     %[len], 1, 1, 0      \n"
         "fmul.d  ft0, ft1, ft2             \n"
         //bp[i] *= Dinv[i];
-        :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start), [stride]"r"(8)
+        :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start)
         : "memory", "zero", "a6", "fa1"
     );
     // clear out bp_tmp
     //__rt_fpu_fence_full(); //avoidable by streaming on ft1
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
+        __RT_SSSR_SCFGWI(%[stride_ex], 31,   __RT_SSSR_REG_STRIDE_0)
         __RT_SSSR_SCFGWI(%[tmp], 1,       __RT_SSSR_REG_WPTR_0)
         "frep.o     %[len], 1, 1, 0      \n"
         "fmv.d        ft1, %[zero]             \n"
-        // bp_tmp[i] = 0;
+        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
         :: [len]"r"(LAST_BP-FIRST_BP-1), [tmp]"r"(&bp_tmp[core_id]),
-           [stride]"r"(8*N_CCS), [zero]"f"(0.0)
+           [stride]"r"(8), [zero]"f"(0.0), [stride_ex]"r"(8*N_CCS)
         : "memory"
     );
     __RT_SSSR_BLOCK_END
@@ -220,7 +214,6 @@ void diaginv_lsolve(Diaginv const * s){
     double* bp_cp_start = &bp_cp[s->rowa];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[icfg],   31,     __RT_SSSR_REG_IDX_CFG)
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
         __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
 
@@ -234,7 +227,7 @@ void diaginv_lsolve(Diaginv const * s){
         "fmv.d  ft0, ft1                 \n"
         //bp[i] *= Dinv[i];
         :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start),
-           [row]"r"(s->assigned_rows), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+           [row]"r"(s->assigned_rows)
         : "memory", "zero", "a6", "fa1"
     );
     __RT_SSSR_BLOCK_END
@@ -297,7 +290,6 @@ void diaginv_ltsolve(Diaginv const * s){
     double* bp_cp_start = &bp_cp[s->rowa-1];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[icfg],   31,     __RT_SSSR_REG_IDX_CFG)
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
         __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
 
@@ -310,8 +302,7 @@ void diaginv_ltsolve(Diaginv const * s){
         "frep.o     %[len], 1, 1, 0      \n"
         "fmv.d  ft0, ft1                 \n"
         //bp[i] *= Dinv[i];
-        :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start),
-           [row]"r"(s->assigned_rows), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+        :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start), [row]"r"(s->assigned_rows)
         : "memory", "zero", "a6", "fa1"
     );
     __RT_SSSR_BLOCK_END
@@ -355,17 +346,17 @@ void collist_lsolve(Collist const * s, int core_id) {
         __RT_SSSR_BLOCK_BEGIN
         asm volatile(
             __RT_SSSR_SCFGWI(%[len],      2,     __RT_SSSR_REG_BOUND_0)
-            __RT_SSSR_SCFGWI(%[icfg],     31,    __RT_SSSR_REG_IDX_CFG)
+            __RT_SSSR_SCFGWI(%[icfg2],     31,    __RT_SSSR_REG_IDX_CFG)
             __RT_SSSR_SCFGWI(%[bp_tmp_g], 31,    __RT_SSSR_REG_IDX_BASE)
-            __RT_SSSR_SCFGWI(%[stride],    2,    __RT_SSSR_REG_STRIDE_0)
 
             __RT_SSSR_SCFGWI(%[rx],  2,    __RT_SSSR_REG_RPTR_0)
             "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
             "mv      zero, a6                    \n" //_rt_fpu_fence_full();
             "csrr    zero,0x7c2                  \n" // __rt_barrier();
             "csrr zero, mcycle                   \n"
+            __RT_SSSR_SCFGWI(%[icfg2],     31,    __RT_SSSR_REG_IDX_CFG)
             :: [len]"r"(s->num_data-1), [rx]"r"(s->rx),
-               [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDX_CFG(__RT_SSSR_IDXSIZE_U16,LOG2_N_CCS,0)),
+               [icfg2]"r"(__RT_SSSR_IDX_CFG(__RT_SSSR_IDXSIZE_U16,LOG2_N_CCS,0)),
                [bp_tmp_g]"r"(&bp_tmp_g[core_id])
             : "memory", "zero", "a6", "fa1"
         );
@@ -373,64 +364,65 @@ void collist_lsolve(Collist const * s, int core_id) {
         // TODO: synchronize read access inbetween columns!!
         //       one might access same data
         unsigned int pos = 0;
-        //for(unsigned int j = 0; j < s->len_cols[i]/2; j++){
-        unsigned int i = 0;
-        for( ;(i+1) < s->num_cols; ){
+        for(unsigned int i = 0; i < s->num_cols; i++){
             unsigned int col = s->assigned_cols[i];
             double val = bp[col]; 
-            asm volatile(
-             __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
-             __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
-             __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
-            "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft0, %[val], ft2, ft1          \n"
-            : [val]"+f"(val)
-            : [ilen]"r"(s->len_cols[i]-1), [ri]"r"(&s->ri[pos])
-            : "memory");
-            pos += s->len_cols[i];
-            //for(unsigned int j = 0; j < s->len_cols[i]; j++){
-            //    asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
-            //    bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
-            //    pos++;
-            //}
-            i++;
-            col = s->assigned_cols[i];
-            val = bp[col]; 
-            asm volatile(
-             __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
-             __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_WPTR_INDIR)
-             __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_RPTR_INDIR)
-            "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft1, %[val], ft2, ft0          \n"
-            : [val]"+f"(val)
-            : [ilen]"r"(s->len_cols[i]-1), [ri]"r"(&s->ri[pos])
-            : "memory");
-            pos += s->len_cols[i];
-            //for(unsigned int j = 0; j < s->len_cols[i]; j++){
-            //    asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
-            //    bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
-            //    pos++;
-            //}
-            i++;
+            for(unsigned int j = 0; j < s->len_cols[i]; j++){
+                asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
+                bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
+                pos++;
+            }
         }
-        if(i < s->num_cols){
-            unsigned int col = s->assigned_cols[i];
-            double val = bp[col]; 
-            asm volatile(
-             __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
-             __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
-             __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
-            "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft0, %[val], ft2, ft1          \n"
-            : [val]"+f"(val)
-            : [ilen]"r"(s->len_cols[i]-1), [ri]"r"(&s->ri[pos])
-            : "memory");
-            //for(unsigned int j = 0; j < s->len_cols[i]; j++){
-            //    asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
-            //    bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
-            //    pos++;
-            //}
-        }
+        ////for(unsigned int j = 0; j < s->len_cols[i]/2; j++){
+        //unsigned int i = 0;
+        //const uint16_t * const assigned_cols = s->assigned_cols;
+        //const uint16_t * const len_cols = s->len_cols;
+        //const uint16_t * const ri = s->ri;
+        //for( ;(i+1) < s->num_cols; ){
+        //    unsigned int col = assigned_cols[i];
+        //    double val = bp[col]; 
+        //    asm volatile(
+        //     __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
+        //     __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
+        //     __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
+        //    "frep.o    %[ilen], 1, 0, 0       \n"
+        //    "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+        //    : [val]"+f"(val)
+        //    : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
+        //    : "memory");
+        //    pos += len_cols[i];
+        //    i++;
+        //    col = assigned_cols[i];
+        //    val = bp[col]; 
+        //    asm volatile(
+        //     __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
+        //     __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
+        //     __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
+        //    "frep.o    %[ilen], 1, 0, 0       \n"
+        //    "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+        //    : [val]"+f"(val)
+        //    : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
+        //    : "memory");
+        //    pos += len_cols[i];
+        //    i++;
+        //}
+        //if(i < s->num_cols){
+        //    unsigned int col = assigned_cols[i];
+        //    double val = bp[col]; 
+        //    asm volatile(
+        //     __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
+        //     __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
+        //     __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
+        //    "frep.o    %[ilen], 1, 0, 0       \n"
+        //    "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+        //    : [val]"+f"(val)
+        //    : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
+        //    : "memory");
+        //}
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[icfg],     31,    __RT_SSSR_REG_IDX_CFG)
+            :: [icfg]"r"(__RT_SSSR_IDXSIZE_U16) : "memory"
+        );
         __RT_SSSR_BLOCK_END
     } else {
         __RT_SEPERATOR 
@@ -486,9 +478,7 @@ void collist_ltsolve(Collist const * s) {
     // stream over bp[ri[..]] and rx[]
     asm volatile(
         __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[icfg],   1,     __RT_SSSR_REG_IDX_CFG)
         __RT_SSSR_SCFGWI(%[bp],  1,       __RT_SSSR_REG_IDX_BASE)
-        __RT_SSSR_SCFGWI(%[stride], 31,    __RT_SSSR_REG_STRIDE_0)
 
         __RT_SSSR_SCFGWI(%[rx],  2,    __RT_SSSR_REG_RPTR_0)
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
@@ -496,8 +486,7 @@ void collist_ltsolve(Collist const * s) {
         "csrr    zero,0x7c2                  \n" // __rt_barrier();
         __RT_SSSR_SCFGWI(%[ri],  1,    __RT_SSSR_REG_RPTR_INDIR)
         "csrr zero, mcycle                   \n"
-        :: [len]"r"(s->num_data-1), [bp]"r"(bp), [rx]"r"(s->rx), [ri]"r"(s->ri),
-           [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+        :: [len]"r"(s->num_data-1), [bp]"r"(bp), [rx]"r"(s->rx), [ri]"r"(s->ri)
         : "memory", "zero", "a6", "fa1"
     );
     // work through rows
@@ -558,9 +547,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
         __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
         __RT_SSSR_SCFGWI(%[bp], 31,       __RT_SSSR_REG_IDX_BASE)
-        __RT_SSSR_SCFGWI(%[stride], 31,    __RT_SSSR_REG_STRIDE_0)
         // bp_cph[..] =  bp[col]*val
         "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
         "mv      zero, a6                 \n" //_rt_fpu_fence_full();
@@ -581,8 +568,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
         "frep.o     %[len], 1, 1, 0     \n"
         "fsub.d ft1,ft0,ft2             \n"
         :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ci),
-           [val]"r"(s->data), [row]"r"(s->ri),
-           [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+           [val]"r"(s->data), [row]"r"(s->ri)
         : "memory", "zero", "a6", "fa1"
     );
     __RT_SSSR_BLOCK_END
@@ -608,9 +594,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
         __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
         __RT_SSSR_SCFGWI(%[bp], 31,       __RT_SSSR_REG_IDX_BASE)
-        __RT_SSSR_SCFGWI(%[stride], 31,    __RT_SSSR_REG_STRIDE_0)
         // bp_cph[..] =  bp[col]*val
         "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
         "mv      zero, a6                 \n" //_rt_fpu_fence_full();
@@ -631,8 +615,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
         "frep.o     %[len], 1, 1, 0     \n"
         "fsub.d ft1,ft0,ft2             \n"
         :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ri),
-           [val]"r"(s->data), [row]"r"(s->ci),
-           [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+           [val]"r"(s->data), [row]"r"(s->ci)
         : "memory", "zero", "a6", "fa1"
     );
     __RT_SSSR_BLOCK_END

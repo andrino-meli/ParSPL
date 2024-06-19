@@ -32,7 +32,8 @@ typedef struct {
 
 void *core_wrap(void *params) {
     cc_params_t* cc_params = params;
-    cc_params->ret = smain(cc_params->coreid, cc_params->num_cores);
+    //cc_params->ret = smain(cc_params->coreid, cc_params->num_cores);
+    cc_params->ret = smain(cc_params->coreid);
     return NULL;
 }
 
