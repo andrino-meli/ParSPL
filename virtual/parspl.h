@@ -2,7 +2,7 @@
 #define KERNEL_H
 #include <stdint.h>
 
-void solve(int core_id);
+void solve();
 
 typedef struct {
     const unsigned int n;         // shape(mat) = (n,n)
@@ -31,10 +31,10 @@ typedef struct {
 } Mapping;
 
 
-void permute(int core_id);
+void permute();
 
 
-void permuteT(int core_id);
+void permuteT();
 
 
 void diaginv_lsolve(Diaginv const * s);
@@ -53,14 +53,14 @@ void diaginv_ltsolve(Diaginv const * s);
  * Copies: relevent part of bp_cp to bp
  */
 
-void diag_inv_mult(int core_id);
+void diag_inv_mult();
 /* vector vector multiplication
  *   bp[] = bp[]*Dinv[]
  *   clear out data
  */
 
 
-void collist_lsolve(Collist const * s, int core_id);
+void collist_lsolve(Collist const * s);
 /* 
  * Solves: Cx = bp
  *         and stores x in bp_tmp_h
@@ -73,12 +73,12 @@ void collist_ltsolve(Collist const * s);
  * Solves: C^Tx = bp
  */
 
-void mapping_lsolve(Mapping const * s, int core_id);
+void mapping_lsolve(Mapping const * s);
 /* 
  * Solves: Mx = bp inplace
  */
 
-void mapping_ltsolve(Mapping const * s, int core_id);
+void mapping_ltsolve(Mapping const * s);
 /* 
  * Solves: M^Tx = bp inplace
  */

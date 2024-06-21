@@ -7,19 +7,16 @@
 #define SSSR
 #endif
 
-double * const bp_avoid_wall_bound_err = bp_tmp;
-double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
-
-void solve(int core_id){
-    unsigned int argidx = argstruct_coreoffset[core_id];
-    for(unsigned int enumidx = enum_coreoffset[core_id]; enumidx < enum_coreoffset[core_id+1]; enumidx++) {
+void solve(){
+    unsigned int argidx = argstruct_coreoffset[_rt_core_id()];
+    for(unsigned int enumidx = enum_coreoffset[_rt_core_id()]; enumidx < enum_coreoffset[_rt_core_id()+1]; enumidx++) {
         enum Kernel kern = enum_joined[enumidx];
         #ifdef VERBOSE
         //printf("H%d:\tkernel %d\t,argidx %d\n",core_id,kern,argidx);
         #endif
         switch (kern) {
             case COLLIST_LSOLVE:
-                collist_lsolve((Collist *) argstruct_joined[argidx], core_id);
+                collist_lsolve((Collist *) argstruct_joined[argidx]);
                 argidx++;
                 break;
             case COLLIST_LTSOLVE:
@@ -35,15 +32,15 @@ void solve(int core_id){
                 argidx++;
                 break;
             case MAPPING_LSOLVE:
-                mapping_lsolve((Mapping *) argstruct_joined[argidx], core_id);
+                mapping_lsolve((Mapping *) argstruct_joined[argidx]);
                 argidx++;
                 break;
             case MAPPING_LTSOLVE:
-                mapping_ltsolve((Mapping *) argstruct_joined[argidx], core_id);
+                mapping_ltsolve((Mapping *) argstruct_joined[argidx]);
                 argidx++;
                 break;
             case DIAG_INV_MULT:
-                diag_inv_mult(core_id);
+                diag_inv_mult();
                 break;
             case SYNCH:
                 __RT_SEPERATOR
@@ -60,7 +57,8 @@ void solve(int core_id){
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
 #ifdef SSSR
-void permute(int core_id) {
+void permute() {
+    const uint32_t core_id = _rt_core_id();
     if (core_id < N_CCS){
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
@@ -82,8 +80,9 @@ void permute(int core_id) {
     }
 }
 #else
-void permute(int core_id) {
+void permute() {
     //__RT_SEPERATOR for clean measurement have it outside.
+    const uint32_t core_id = _rt_core_id();
     if (core_id < N_CCS){
         for (int i = core_id; i < LINSYS_N; i += N_CCS) {
             bp[i] = b[Perm[i]];
@@ -95,7 +94,8 @@ void permute(int core_id) {
 // Permute back bp to x: x = P_ermute^T*bp
 // TODO: make lin sys library
 #ifdef SSSR
-void permuteT(int core_id) {
+void permuteT() {
+    const uint32_t core_id = _rt_core_id();
     if (core_id < N_CCS){
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
@@ -121,10 +121,10 @@ void permuteT(int core_id) {
     }
 }
 #else
-void permuteT(int core_id) {
+void permuteT() {
     __RT_SEPERATOR
-    if (core_id < N_CCS){
-        for (int i = core_id; i < LINSYS_N; i += N_CCS) {
+    if (_rt_core_id() < N_CCS){
+        for (int i = _rt_core_id(); i < LINSYS_N; i += N_CCS) {
             x[Perm[i]] = bp[i];
         }
     }
@@ -133,9 +133,10 @@ void permuteT(int core_id) {
 
 
 #ifdef SSSR
-void diag_inv_mult(int core_id) {
+void diag_inv_mult() {
     // multiply
     __RT_SSSR_BLOCK_BEGIN
+    const uint32_t core_id = _rt_core_id();
     uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
     double* bp_start = &bp[start_perm[core_id]];
     double* dinv_start = &Dinv[start_perm[core_id]];
@@ -171,8 +172,9 @@ void diag_inv_mult(int core_id) {
     __RT_SSSR_BLOCK_END
 }
 #else
-void diag_inv_mult(int core_id) {
+void diag_inv_mult() {
     // multiply
+    const uint32_t core_id = _rt_core_id();
     __RT_SEPERATOR
     for (int i = core_id; i < LINSYS_N; i += N_CCS) {
         bp[i] *= Dinv[i];
@@ -340,44 +342,31 @@ void diaginv_ltsolve(Diaginv const * s){
 
 
 #ifdef SSSR
-void collist_lsolve(Collist const * s, int core_id) {
+void collist_lsolve(Collist const * s) {
     // stream over bp[ri[..]] and rx[]
     if( s->num_data != 0) { // no empty stream
         __RT_SSSR_BLOCK_BEGIN
-        asm volatile(
-            __RT_SSSR_SCFGWI(%[len],      2,     __RT_SSSR_REG_BOUND_0)
-            __RT_SSSR_SCFGWI(%[icfg2],     31,    __RT_SSSR_REG_IDX_CFG)
-            __RT_SSSR_SCFGWI(%[bp_tmp_g], 31,    __RT_SSSR_REG_IDX_BASE)
-
-            __RT_SSSR_SCFGWI(%[rx],  2,    __RT_SSSR_REG_RPTR_0)
-            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
-            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
-            "csrr    zero,0x7c2                  \n" // __rt_barrier();
-            "csrr zero, mcycle                   \n"
-            __RT_SSSR_SCFGWI(%[icfg2],     31,    __RT_SSSR_REG_IDX_CFG)
-            :: [len]"r"(s->num_data-1), [rx]"r"(s->rx),
-               [icfg2]"r"(__RT_SSSR_IDX_CFG(__RT_SSSR_IDXSIZE_U16,LOG2_N_CCS,0)),
-               [bp_tmp_g]"r"(&bp_tmp_g[core_id])
-            : "memory", "zero", "a6", "fa1"
-        );
-        // work through columns
-        // TODO: synchronize read access inbetween columns!!
-        //       one might access same data
         unsigned int pos = 0;
-        //for(unsigned int i = 0; i < s->num_cols; i++){
-        //    unsigned int col = s->assigned_cols[i];
-        //    double val = bp[col]; 
-        //    for(unsigned int j = 0; j < s->len_cols[i]; j++){
-        //        asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
-        //        bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
-        //        pos++;
-        //    }
-        //}
-        //for(unsigned int j = 0; j < s->len_cols[i]/2; j++){
         unsigned int i = 0;
         const uint16_t * const assigned_cols = s->assigned_cols;
         const uint16_t * const len_cols = s->len_cols;
         const uint16_t * const ri = s->ri;
+
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len],      2,     __RT_SSSR_REG_BOUND_0)
+            "li a6, %[icfg2] \n"
+            __RT_SSSR_SCFGWI(a6,          31,    __RT_SSSR_REG_IDX_CFG)
+            __RT_SSSR_SCFGWI(%[bp_tmp_g], 31,    __RT_SSSR_REG_IDX_BASE)
+
+            __RT_SSSR_SCFGWI(%[rx],        2,    __RT_SSSR_REG_RPTR_0)
+            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+            "csrr    zero,0x7c2                  \n" // _rt_barrier();
+            "csrr zero, mcycle                   \n"
+            :: [len]"r"(s->num_data-1), [rx]"r"(s->rx), [bp_tmp_g]"r"(&bp_tmp_g[_rt_core_id()]),
+               [icfg2]"i"(__RT_SSSR_IDX_CFG(__RT_SSSR_IDXSIZE_U16,LOG2_N_CCS,0))
+            : "memory", "zero", "fa1", "a6"
+        );
         for( ;(i+1) < s->num_cols; ){
             unsigned int col = assigned_cols[i];
             double val = bp[col]; 
@@ -465,10 +454,11 @@ void collist_lsolve(Collist const * s, int core_id) {
     //);
 }
 #else
-void collist_lsolve(Collist const * s, int core_id) {
+void collist_lsolve(Collist const * s) {
     // pos array to index over ri, rx
     // TODO: when streaming add an if condition to circumvent an empty stream
     unsigned int pos = 0; 
+    const uint32_t core_id = _rt_core_id();
     // work through columns
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->num_cols; i++){
@@ -566,8 +556,9 @@ void collist_ltsolve(Collist const * s) {
 #ifdef SSSR
 // sadly we would need 4 SSSR streams to make this work fully!
 // instead we stream twice and store intermed. in bp_cph
-void mapping_lsolve(Mapping const * s, int core_id) {
+void mapping_lsolve(Mapping const * s) {
     uint32_t len = s->assigned_data -1;
+    const uint32_t core_id = _rt_core_id();
     double* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
@@ -599,7 +590,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
     __RT_SSSR_BLOCK_END
 }
 #else
-void mapping_lsolve(Mapping const * s, int core_id) {
+void mapping_lsolve(Mapping const * s) {
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->assigned_data; i++){
         uint16_t row = s->ri[i];
@@ -613,8 +604,9 @@ void mapping_lsolve(Mapping const * s, int core_id) {
 
 
 #ifdef SSSR
-void mapping_ltsolve(Mapping const * s, int core_id) {
+void mapping_ltsolve(Mapping const * s) {
     uint32_t len = s->assigned_data -1;
+    const uint32_t core_id = _rt_core_id();
     double* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
@@ -646,7 +638,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
     __RT_SSSR_BLOCK_END
 }
 #else
-void mapping_ltsolve(Mapping const * s, int core_id) {
+void mapping_ltsolve(Mapping const * s) {
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->assigned_data; i++){
         uint16_t col = s->ri[i];

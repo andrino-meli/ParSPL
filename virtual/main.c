@@ -93,11 +93,11 @@ int smain(uint32_t core_id) {
         );
     }
 #endif
-    permute(core_id);
+    permute();
     solve(core_id);
-    permuteT(core_id);
+    permuteT();
     __RT_SEPERATOR
-    if (core_id == 0) {
+    if (_rt_core_id() == 0) {
         return verify();
     }
     // all other cores return 4242
