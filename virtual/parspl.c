@@ -11,6 +11,7 @@ double * const bp_avoid_wall_bound_err = bp_tmp;
 double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
 
 void solve(int core_id){
+    asm volatile("_solve: \n":::);
     unsigned int argidx = argstruct_coreoffset[core_id];
     for(unsigned int enumidx = enum_coreoffset[core_id]; enumidx < enum_coreoffset[core_id+1]; enumidx++) {
         enum Kernel kern = enum_joined[enumidx];
@@ -61,6 +62,7 @@ void solve(int core_id){
 // TODO: make lin sys library: indirection copy
 #ifdef SSSR
 void permute(int core_id) {
+    asm volatile("_permute%=: \n":::);
     if (core_id < N_CCS){
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
@@ -96,6 +98,7 @@ void permute(int core_id) {
 // TODO: make lin sys library
 #ifdef SSSR
 void permuteT(int core_id) {
+    asm volatile("_permuteT: \n":::);
     if (core_id < N_CCS){
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
@@ -134,6 +137,7 @@ void permuteT(int core_id) {
 
 #ifdef SSSR
 void diag_inv_mult(int core_id) {
+    asm volatile("_diag_inv_mult: \n":::);
     // multiply
     __RT_SSSR_BLOCK_BEGIN
     uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
@@ -192,23 +196,43 @@ void diag_inv_mult(int core_id) {
 
 #ifdef SSSR
 void diaginv_lsolve(Diaginv const * s){
+    asm volatile("_diaginv_lsolve: \n":::);
     // iterate through the rows
+    //asm volatile(
+    //    __RT_SSSR_SCFGWI(%[len2],  2,     __RT_SSSR_REG_BOUND_0)
+    //    __RT_SSSR_SCFGWI(%[bp_cp], 2,     __RT_SSSR_REG_IDX_BASE)
+    //    __RT_SSSR_SCFGWI(%[row],   2,     __RT_SSSR_REG_WPTR_INDIR)
+    //    :: [len2]"r"(s->num_rows-1), [bp_cp]"r"(&bp_cp[s->rowa]), [row]"r"(s->assigned_rows)
+    //    : "memory"
+    //);
+    __RT_SSSR_BLOCK_BEGIN
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int row = s->assigned_rows[i];
-        //printf("diaginv_lsolve: processing row %d, row+rowa %d\n",row,row+s->rowa);
         // dot product of row and bp
-        double val = 0;
-        for(unsigned col = 0; col <= row; col++){
-            // TODO: currently all harts have the same access pattern to bp
-            //       have to reverse to avoid tcdm access congestion
-            val += s->mat[row * s->n + col] * bp[s->rowa + col];
-        }
-        // update bp_cp[row]
+        double val;
+        asm volatile(
+            "fmv.d ft3, %[zero]             \n"
+            "fmv.d ft4, %[zero]             \n"
+            "fmv.d ft5, %[zero]             \n"
+            "fmv.d ft6, %[zero]             \n"
+            __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+            // TODO: revert access to avoid TCDM congestion
+            __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
+            "frep.o    %[len], 1, 3, 0b1001 \n"
+            "fmadd.d    ft3, ft0, ft1, ft3  \n"
+            "fadd.d     ft5, ft5, ft6       \n"
+            "fadd.d     ft3, ft3, ft4       \n"
+            "fadd.d     %[val], ft3, ft5    \n"
+            : [val]"=f"(val)
+            : [len]"r"(row), [bp]"r"(&bp[s->rowa]),
+              [mat]"r"(&s->mat[row*s->n]), [zero]"f"(0.0)
+            : "memory", "ft3","ft4","ft5","ft6"
+        );
         bp_cp[s->rowa + row] = val;
     }
     // update bp from bp_cp
-    __RT_SSSR_BLOCK_BEGIN
     uint32_t len = s->num_rows-1;
     double* bp_start = &bp[s->rowa];
     double* bp_cp_start = &bp_cp[s->rowa];
@@ -263,44 +287,64 @@ void diaginv_lsolve(Diaginv const * s){
 
 #ifdef SSSR
 void diaginv_ltsolve(Diaginv const * s){
+    asm volatile("_diaginv_ltsolve: \n":::);
     // The first row in FE and the last column in BS can be neglected
     // as multiplication with it is just the identity.
     // Therefor we only process the rows 1..n and columns 0..n-1
     // iterate through the rows
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[stride_ex], 1,   __RT_SSSR_REG_STRIDE_0)
+        :: [stride_ex]"r"(s->n*8) : "memory"
+    );
     __RT_SEPERATOR
+    __RT_SSSR_BLOCK_BEGIN
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int col = s->n - s->assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
-        //printf("diaginv_ltsolve: processing col %d, col+rowa %d\n",col,col+rowa);
-        // dot product of col and bp
         double val = 0;
-        for(unsigned int row = col; row < s->n; row++){
-            val += s->mat[row * s->n + col] * bp[s->rowa + row];
-            //printf("col %d row %d   s->mat[%d] bp[%d]\t",col, row, row*s->n+col,s->rowa + row);
-            //printf("mat=%f\tbp=%f\tval=%f\n", s->mat[row * s->n + col], bp[s->rowa + row], val);
-        }
-        // update bp_cp[col]
+        asm volatile(
+            // TODO: revert access to avoid TCDM congestion
+            "fmv.d ft3, %[zero]             \n"
+            "fmv.d ft4, %[zero]             \n"
+            "fmv.d ft5, %[zero]             \n"
+            "fmv.d ft6, %[zero]             \n"
+            __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+            __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
+            "frep.o    %[len], 1, 3, 0b1001 \n"
+            "fmadd.d    ft3, ft0, ft1, ft3  \n"
+            // val += s->mat[row * s->n + col] * bp[s->rowa + row];
+            "fadd.d     ft5, ft5, ft6       \n"
+            "fadd.d     ft3, ft3, ft4       \n"
+            "fadd.d     %[val], ft3, ft5    \n"
+            : [val]"=f"(val)
+            : [len]"r"(s->assigned_rows[i]), [bp]"r"(&bp[s->rowa + col]),
+              [mat]"r"(&s->mat[col*s->n + col]), [zero]"f"(0.0)
+            : "memory", "ft3","ft4","ft5","ft6"
+        );
         bp_cp[s->rowa + col] = val;
     }
+    asm volatile(
+        __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
+        :: [stride]"r"(8) : "memory"
+    );
     // update bp from bp_cp
-    // synchronize
-    __RT_SSSR_BLOCK_BEGIN
     uint32_t len = s->num_rows-1;
     double* bp_start = &bp[s->rowa-1];
     double* bp_cp_start = &bp_cp[s->rowa-1];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
-        __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[bp_cp], 1,    __RT_SSSR_REG_IDX_BASE)
 
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
         "mv      zero, a6                    \n" //_rt_fpu_fence_full();
         "csrr    zero,0x7c2                  \n" // __rt_barrier();
-        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_WPTR_INDIR) //TODO move
-        __RT_SSSR_SCFGWI(%[row], 1,    __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[row], 0,      __RT_SSSR_REG_WPTR_INDIR) //TODO move
+        __RT_SSSR_SCFGWI(%[row], 1,      __RT_SSSR_REG_RPTR_INDIR)
         "csrr zero, mcycle                   \n"
-        "frep.o     %[len], 1, 1, 0      \n"
-        "fmv.d  ft0, ft1                 \n"
+        "frep.o     %[len], 1, 1, 0          \n"
+        "fmv.d  ft0, ft1                     \n"
         //bp[i] *= Dinv[i];
         :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start), [row]"r"(s->assigned_rows)
         : "memory", "zero", "a6", "fa1"
@@ -341,6 +385,7 @@ void diaginv_ltsolve(Diaginv const * s){
 
 #ifdef SSSR
 void collist_lsolve(Collist const * s, int core_id) {
+    asm volatile("_collist_lsolve: \n":::);
     // stream over bp[ri[..]] and rx[]
     if( s->num_data != 0) { // no empty stream
         __RT_SSSR_BLOCK_BEGIN
@@ -499,6 +544,7 @@ void collist_lsolve(Collist const * s, int core_id) {
 
 #ifdef SSSR
 void collist_ltsolve(Collist const * s) {
+    asm volatile("_collist_ltsolve: \n":::);
     __RT_SSSR_BLOCK_BEGIN
     // stream over bp[ri[..]] and rx[]
     asm volatile(
@@ -567,6 +613,7 @@ void collist_ltsolve(Collist const * s) {
 // sadly we would need 4 SSSR streams to make this work fully!
 // instead we stream twice and store intermed. in bp_cph
 void mapping_lsolve(Mapping const * s, int core_id) {
+    asm volatile("_mapping_lsolve: \n":::);
     uint32_t len = s->assigned_data -1;
     double* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
@@ -614,6 +661,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
 
 #ifdef SSSR
 void mapping_ltsolve(Mapping const * s, int core_id) {
+    asm volatile("_mapping_ltsolve: \n":::);
     uint32_t len = s->assigned_data -1;
     double* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
