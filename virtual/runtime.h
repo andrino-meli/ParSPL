@@ -22,4 +22,4 @@ inline uint32_t __rt_get_timer();
 }
 
 // ----- Runtime management -----
-int smain(uint32_t coreid, uint32_t num_cores);
+int smain(uint32_t coreid);

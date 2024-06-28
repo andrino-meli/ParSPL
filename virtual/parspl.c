@@ -296,33 +296,63 @@ void diaginv_ltsolve(Diaginv const * s){
         __RT_SSSR_SCFGWI(%[stride_ex], 1,   __RT_SSSR_REG_STRIDE_0)
         :: [stride_ex]"r"(s->n*8) : "memory"
     );
-    __RT_SEPERATOR
-    __RT_SSSR_BLOCK_BEGIN
+    __RT_SSSR_BLOCK_BEGIN_NOSTART
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int col = s->n - s->assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
-        double val = 0;
-        asm volatile(
-            // TODO: revert access to avoid TCDM congestion
-            "fmv.d ft3, %[zero]             \n"
-            "fmv.d ft4, %[zero]             \n"
-            "fmv.d ft5, %[zero]             \n"
-            "fmv.d ft6, %[zero]             \n"
-            __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-            __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
-            __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
-            "frep.o    %[len], 1, 3, 0b1001 \n"
-            "fmadd.d    ft3, ft0, ft1, ft3  \n"
-            // val += s->mat[row * s->n + col] * bp[s->rowa + row];
-            "fadd.d     ft5, ft5, ft6       \n"
-            "fadd.d     ft3, ft3, ft4       \n"
-            "fadd.d     %[val], ft3, ft5    \n"
-            : [val]"=f"(val)
-            : [len]"r"(s->assigned_rows[i]), [bp]"r"(&bp[s->rowa + col]),
-              [mat]"r"(&s->mat[col*s->n + col]), [zero]"f"(0.0)
-            : "memory", "ft3","ft4","ft5","ft6"
-        );
-        bp_cp[s->rowa + col] = val;
+        double val;
+        double const * const bparg = &bp[s->rowa + col];
+        double const * const matarg = &s->mat[col*s->n + col];
+        if ( i == 0 ){ // for i=0 also synchronize!
+            asm volatile(
+                // TODO: revert access to avoid TCDM congestion
+                "fmv.d ft3, %[zero]             \n"
+                "fmv.d ft4, %[zero]             \n"
+                "fmv.d ft5, %[zero]             \n"
+                "fmv.d ft6, %[zero]             \n"
+                __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+                "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+                "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+                "csrr    zero,0x7c2                  \n" // __rt_barrier();
+                __RT_SSSR_ENABLE
+                __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
+                __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
+                "csrr zero, mcycle                   \n"
+                "frep.o    %[len], 1, 3, 0b1001 \n"
+                "fmadd.d    ft3, ft0, ft1, ft3  \n"
+                // val += s->mat[row * s->n + col] * bp[s->rowa + row];
+                "fadd.d     ft5, ft5, ft6       \n"
+                "fadd.d     ft3, ft3, ft4       \n"
+                "fadd.d     %[val], ft3, ft5    \n"
+                : [val]"=f"(val)
+                : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
+                  [mat]"r"(matarg), [zero]"f"(0.0)
+                : "memory", "ft3","ft4","ft5","ft6", "a6"
+            );
+            bp_cp[s->rowa + col] = val;
+        } else {
+            asm volatile(
+                // TODO: revert access to avoid TCDM congestion
+                "fmv.d ft3, %[zero]             \n"
+                "fmv.d ft4, %[zero]             \n"
+                "fmv.d ft5, %[zero]             \n"
+                "fmv.d ft6, %[zero]             \n"
+                __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+                __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
+                __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
+                "frep.o    %[len], 1, 3, 0b1001 \n"
+                "fmadd.d    ft3, ft0, ft1, ft3  \n"
+                // val += s->mat[row * s->n + col] * bp[s->rowa + row];
+                "fadd.d     ft5, ft5, ft6       \n"
+                "fadd.d     ft3, ft3, ft4       \n"
+                "fadd.d     %[val], ft3, ft5    \n"
+                : [val]"=f"(val)
+                : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
+                  [mat]"r"(matarg), [zero]"f"(0.0)
+                : "memory", "ft3","ft4","ft5","ft6"
+            );
+            bp_cp[s->rowa + col] = val;
+        }
     }
     asm volatile(
         __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
