@@ -564,8 +564,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         fc = open(workc,'w')
 
         # includes and defines
-        fc.write('#include "workspace.h"\n')
-        fc.write('#include "runtime.h"\n\n')
+        fc.write('#include "workspace.h"\n\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
@@ -643,9 +642,6 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         # temporary space for intermediate results before reduction
         bp_tmp = np.zeros(HARTS*(lastbp-firstbp))
         ndarrayToCH(fc,fh,f'bp_tmp',bp_tmp)
-        fh.write('extern double * const bp_tmp_g; //address offset bp_tmp to save memory\n')
-        fc.write('double * const bp_avoid_wall_bound_err = bp_tmp;\n\
-double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];\n');
     finally:
         fh.close()
         fc.close()
