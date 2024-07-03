@@ -581,59 +581,33 @@ void collist_ltsolve(Collist const * s) {
         : "memory", "zero", "a6", "fa1"
     );
     // work through rows
+    double register val asm("ft3");
+    double register val4 asm("ft4");
+    double register val5 asm("ft5");
+    double register val6 asm("ft6");
     for(unsigned int i = 0; i < s->num_cols; i++){
         unsigned int row = s->assigned_cols[i];
         // work through data in a row: read val
-        double register val asm("ft3");
-        double register val4 asm("ft4");
-        double register val5 asm("ft5");
-        double register val6 asm("ft6");
         val = bp[row];
+        val4 = 0.0;
+        val5 = 0.0;
+        val6 = 0.0;
         uint16_t ilen = s->len_cols[i]-1;
-        switch (ilen) {
-            case 0:
-                asm volatile(
-                "frep.o    %[ilen], 1, 3, 0b1001       \n"
-                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-                : [val]"+f"(val) : [ilen]"r"(ilen) : "memory");
-                break;
-            case 1:
-                val4 = 0.0;
-                asm volatile(
-                "frep.o    %[ilen], 1, 3, 0b1001       \n"
-                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-                "fadd.d    ft3, ft3, ft4               \n"
-                : [val]"+f"(val), [val4]"+f"(val4)
-                : [ilen]"r"(ilen)
-                : "memory");
-                break;
-            case 2:
-                val4 = 0.0;
-                val5 = 0.0;
-                asm volatile(
-                "frep.o    %[ilen], 1, 3, 0b1001       \n"
-                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-                "fadd.d    ft3, ft3, ft4               \n"
-                "fadd.d    ft3, ft3, ft5               \n"
-                : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5)
-                : [ilen]"r"(ilen)
-                : "memory");
-                break;
-            default:
-                val4 = 0.0;
-                val5 = 0.0;
-                val6 = 0.0;
-                asm volatile(
-                "frep.o    %[ilen], 1, 3, 0b1001       \n"
-                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-                "fadd.d    ft3, ft3, ft4               \n"
-                "fadd.d    ft5, ft5, ft6               \n"
-                "fadd.d    ft3, ft3, ft5               \n"
-                : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5), [val6]"+f"(val6)
-                : [ilen]"r"(ilen)
-                : "memory");
-                break;
-        }
+        asm volatile(
+        "frep.o    %[ilen], 1, 3, 0b1001       \n"
+        "fnmsub.d  ft3, ft1, ft2, ft3          \n"
+        "fadd.d   ft3, ft3, ft4                \n"
+        "fadd.d   ft5, ft5, ft6                \n"
+        "fadd.d   ft3, ft5, ft3                \n"
+        : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5), [val6]"+f"(val6)
+        : [ilen]"r"(ilen)
+        : "memory");
+        //switch (ilen) {
+        //    case 0:  break;
+        //    case 1: val = val + val4; val4 = 0.0; break;
+        //    case 2: val = val + val4; val = val + val5; val4 = 0.0; val5 = 0.0; break;
+        //    default: val = val + val4; val5 = val5 + val6; val = val + val5; val4 = 0.0; val5 = 0.0; val6 = 0.0; break;
+        //}
         bp[row] = val;
     }
     __RT_SSSR_BLOCK_END
