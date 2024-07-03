@@ -217,7 +217,7 @@ void diaginv_lsolve(Diaginv const * s){
             "fmv.d ft5, %[zero]             \n"
             "fmv.d ft6, %[zero]             \n"
             __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-            // TODO: revert access to avoid TCDM congestion
+            // TODO: revert access to avoid TCDM congestion (?)
             __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
             __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
             "frep.o    %[len], 1, 3, 0b1001 \n"
@@ -460,7 +460,7 @@ void collist_lsolve(Collist const * s, int core_id) {
             : "memory");
             pos += len_cols[i];
             i++;
-            double val2 = bp[col2]; // load here allready
+            double val2 = bp[col2]; // TODO: load at beginning of 2x unroll
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
              __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_WPTR_INDIR)
@@ -533,7 +533,6 @@ void collist_lsolve(Collist const * s, int core_id) {
 #else
 void collist_lsolve(Collist const * s, int core_id) {
     // pos array to index over ri, rx
-    // TODO: when streaming add an if condition to circumvent an empty stream
     unsigned int pos = 0; 
     // work through columns
     __RT_SEPERATOR
@@ -543,7 +542,7 @@ void collist_lsolve(Collist const * s, int core_id) {
         double val = bp[col];
         // work through data in a column
         for(unsigned int j = 0; j < s->len_cols[i]; j++){
-            // TODO: N_CCS interleaved data access is expensive: consider placing
+            // Note: N_CCS interleaved data access is expensive: consider placing
             //  bp_tmp differently in memory to make access continuous
             bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * s->rx[pos];
             pos++;
@@ -589,22 +588,52 @@ void collist_ltsolve(Collist const * s) {
         double register val4 asm("ft4");
         double register val5 asm("ft5");
         double register val6 asm("ft6");
-        val = bp[row]; //TODO: use single SSSR stream for this load
-        val4 = 0.0;
-        val5 = 0.0;
-        val6 = 0.0;
-        // update val
-        asm volatile(
-        //"fmv.d     ft4, %[zero]                \n;"
-        //"fmv.d     ft5, %[zero]                \n;"
-        "frep.o    %[ilen], 1, 3, 0b1001       \n"
-        "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-        "fadd.d    ft3, ft3, ft4               \n"
-        "fadd.d    ft5, ft5, ft6               \n"
-        "fadd.d    ft3, ft3, ft5               \n"
-        : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5), [val6]"+f"(val6)
-        : [ilen]"r"(s->len_cols[i]-1), [zero]"f"(0.0)
-        : "memory");
+        val = bp[row];
+        uint16_t ilen = s->len_cols[i]-1;
+        switch (ilen) {
+            case 0:
+                asm volatile(
+                "frep.o    %[ilen], 1, 3, 0b1001       \n"
+                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
+                : [val]"+f"(val) : [ilen]"r"(ilen) : "memory");
+                break;
+            case 1:
+                val4 = 0.0;
+                asm volatile(
+                "frep.o    %[ilen], 1, 3, 0b1001       \n"
+                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
+                "fadd.d    ft3, ft3, ft4               \n"
+                : [val]"+f"(val), [val4]"+f"(val4)
+                : [ilen]"r"(ilen)
+                : "memory");
+                break;
+            case 2:
+                val4 = 0.0;
+                val5 = 0.0;
+                asm volatile(
+                "frep.o    %[ilen], 1, 3, 0b1001       \n"
+                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
+                "fadd.d    ft3, ft3, ft4               \n"
+                "fadd.d    ft3, ft3, ft5               \n"
+                : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5)
+                : [ilen]"r"(ilen)
+                : "memory");
+                break;
+            default:
+                val4 = 0.0;
+                val5 = 0.0;
+                val6 = 0.0;
+                asm volatile(
+                "frep.o    %[ilen], 1, 3, 0b1001       \n"
+                "fnmsub.d  ft3, ft1, ft2, ft3          \n"
+                "fadd.d    ft3, ft3, ft4               \n"
+                "fadd.d    ft5, ft5, ft6               \n"
+                "fadd.d    ft3, ft3, ft5               \n"
+                : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5), [val6]"+f"(val6)
+                : [ilen]"r"(ilen)
+                : "memory");
+                break;
+        }
         bp[row] = val;
     }
     __RT_SSSR_BLOCK_END
