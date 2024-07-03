@@ -296,41 +296,44 @@ void diaginv_ltsolve(Diaginv const * s){
         __RT_SSSR_SCFGWI(%[stride_ex], 1,   __RT_SSSR_REG_STRIDE_0)
         :: [stride_ex]"r"(s->n*8) : "memory"
     );
-    __RT_SSSR_BLOCK_BEGIN_NOSTART
+    __RT_SSSR_BLOCK_BEGIN
+    __RT_SEPERATOR 
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int col = s->n - s->assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
         double val;
         double const * const bparg = &bp[s->rowa + col];
         double const * const matarg = &s->mat[col*s->n + col];
-        if ( i == 0 ){ // for i=0 also synchronize!
-            asm volatile(
-                // TODO: revert access to avoid TCDM congestion
-                "fmv.d ft3, %[zero]             \n"
-                "fmv.d ft4, %[zero]             \n"
-                "fmv.d ft5, %[zero]             \n"
-                "fmv.d ft6, %[zero]             \n"
-                __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-                "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
-                "mv      zero, a6                    \n" //_rt_fpu_fence_full();
-                "csrr    zero,0x7c2                  \n" // __rt_barrier();
-                __RT_SSSR_ENABLE
-                __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
-                __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
-                "csrr zero, mcycle                   \n"
-                "frep.o    %[len], 1, 3, 0b1001 \n"
-                "fmadd.d    ft3, ft0, ft1, ft3  \n"
-                // val += s->mat[row * s->n + col] * bp[s->rowa + row];
-                "fadd.d     ft5, ft5, ft6       \n"
-                "fadd.d     ft3, ft3, ft4       \n"
-                "fadd.d     %[val], ft3, ft5    \n"
-                : [val]"=f"(val)
-                : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
-                  [mat]"r"(matarg), [zero]"f"(0.0)
-                : "memory", "ft3","ft4","ft5","ft6", "a6"
-            );
-            bp_cp[s->rowa + col] = val;
-        } else {
+        //if ( i == 0 ){ // for i=0 also synchronize!
+        //    asm volatile(
+        //        // TODO: revert access to avoid TCDM congestion
+        //        "fmv.d ft3, %[zero]             \n"
+        //        "fmv.d ft4, %[zero]             \n"
+        //        "fmv.d ft5, %[zero]             \n"
+        //        "fmv.d ft6, %[zero]             \n"
+        //        __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
+        //        // the reason we take the i==0 out of the loop is to have the
+        //        // synchronization fence as late as possible.
+        //        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+        //        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+        //        "csrr    zero,0x7c2                  \n" // __rt_barrier();
+        //        __RT_SSSR_ENABLE
+        //        __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
+        //        __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
+        //        "csrr zero, mcycle                   \n"
+        //        "frep.o    %[len], 1, 3, 0b1001 \n"
+        //        "fmadd.d    ft3, ft0, ft1, ft3  \n"
+        //        // val += s->mat[row * s->n + col] * bp[s->rowa + row];
+        //        "fadd.d     ft5, ft5, ft6       \n"
+        //        "fadd.d     ft3, ft3, ft4       \n"
+        //        "fadd.d     %[val], ft3, ft5    \n"
+        //        : [val]"=f"(val)
+        //        : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
+        //          [mat]"r"(matarg), [zero]"f"(0.0)
+        //        : "memory", "ft3","ft4","ft5","ft6", "a6"
+        //    );
+        //    bp_cp[s->rowa + col] = val;
+        //} else {
             asm volatile(
                 // TODO: revert access to avoid TCDM congestion
                 "fmv.d ft3, %[zero]             \n"
@@ -352,7 +355,7 @@ void diaginv_ltsolve(Diaginv const * s){
                 : "memory", "ft3","ft4","ft5","ft6"
             );
             bp_cp[s->rowa + col] = val;
-        }
+        //}
     }
     asm volatile(
         __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
@@ -436,18 +439,7 @@ void collist_lsolve(Collist const * s, int core_id) {
             : "memory", "zero", "a6", "fa1"
         );
         // work through columns
-        // TODO: synchronize read access inbetween columns!!
-        //       one might access same data
         unsigned int pos = 0;
-        //for(unsigned int i = 0; i < s->num_cols; i++){
-        //    unsigned int col = s->assigned_cols[i];
-        //    double val = bp[col]; 
-        //    for(unsigned int j = 0; j < s->len_cols[i]; j++){
-        //        asm volatile(__RT_SSSR_ENABLE : "+f"(_rt_sssr_2), "+f"(_rt_sssr_1), "+f"(_rt_sssr_0)  :: "memory");
-        //        bp_tmp_g[core_id + N_CCS * s->ri[pos]] -= val * _rt_sssr_2;
-        //        pos++;
-        //    }
-        //}
         //for(unsigned int j = 0; j < s->len_cols[i]/2; j++){
         unsigned int i = 0;
         const uint16_t * const assigned_cols = s->assigned_cols;
@@ -455,6 +447,7 @@ void collist_lsolve(Collist const * s, int core_id) {
         const uint16_t * const ri = s->ri;
         for( ;(i+1) < s->num_cols; ){
             unsigned int col = assigned_cols[i];
+            unsigned int col2 = assigned_cols[i+1];
             double val = bp[col]; 
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
@@ -467,15 +460,14 @@ void collist_lsolve(Collist const * s, int core_id) {
             : "memory");
             pos += len_cols[i];
             i++;
-            col = assigned_cols[i];
-            val = bp[col]; 
+            double val2 = bp[col2]; // load here allready
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
              __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_WPTR_INDIR)
              __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_RPTR_INDIR)
             "frep.o    %[ilen], 1, 0, 0       \n"
             "fnmsub.d  ft1, %[val], ft2, ft0          \n"
-            : [val]"+f"(val)
+            : [val]"+f"(val2)
             : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
             : "memory");
             pos += len_cols[i];
@@ -503,7 +495,6 @@ void collist_lsolve(Collist const * s, int core_id) {
         __RT_SEPERATOR 
     }
     // synchronize
-    //__RT_SEPERATOR
     // reduce bp_tmp1 up to bp_tmp7 into bp
     //uint32_t threeUnlen = s->reductionlen / 3;
     asm volatile(
