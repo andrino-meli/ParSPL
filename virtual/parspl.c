@@ -419,9 +419,9 @@ void diaginv_ltsolve(Diaginv const * s){
 #ifdef SSSR
 void collist_lsolve(Collist const * s, int core_id) {
     asm volatile("_collist_lsolve: \n":::);
+    __RT_SSSR_BLOCK_BEGIN
     // stream over bp[ri[..]] and rx[]
     if( s->num_data != 0) { // no empty stream
-        __RT_SSSR_BLOCK_BEGIN
         asm volatile(
             __RT_SSSR_SCFGWI(%[len],      2,     __RT_SSSR_REG_BOUND_0)
             __RT_SSSR_SCFGWI(%[icfg2],     31,    __RT_SSSR_REG_IDX_CFG)
@@ -490,45 +490,78 @@ void collist_lsolve(Collist const * s, int core_id) {
             __RT_SSSR_SCFGWI(%[icfg],     31,    __RT_SSSR_REG_IDX_CFG)
             :: [icfg]"r"(__RT_SSSR_IDXSIZE_U16) : "memory"
         );
-        __RT_SSSR_BLOCK_END
     } else {
         __RT_SEPERATOR 
     }
     // synchronize
     // reduce bp_tmp1 up to bp_tmp7 into bp
-    //uint32_t threeUnlen = s->reductionlen / 3;
+    unsigned int i = s-> reductiona;
     asm volatile(
-        //__RT_SSSR_SCFGWI(%[len],       2,    __RT_SSSR_REG_BOUND_0)
-        //__RT_SSSR_SCFGWI(%[stride_ex], 31,   __RT_SSSR_REG_STRIDE_0)
-
-        //__RT_SSSR_SCFGWI(%[bp_tmp_g0],  0     __RT_SSSR_REG_RPTR_0)
-        //__RT_SSSR_SCFGWI(%[bp_tmp_g1],  1,    __RT_SSSR_REG_RPTR_0)
-        //__RT_SSSR_SCFGWI(%[bp_tmp_g2],  2,    __RT_SSSR_REG_RPTR_0)
+       "_collist_lsolve_red: \n"
+        __RT_SSSR_SCFGWI(%[len],       31,    __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[lenbp],      2,    __RT_SSSR_REG_BOUND_0)
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
         "mv      zero, a6                    \n" //_rt_fpu_fence_full();
         "csrr    zero,0x7c2                  \n" // __rt_barrier();
         "csrr    zero, mcycle                \n"
-        __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
-        :: [len]"r"(N_CCS*s->reductionlen-1),
-           [bp_tmp_g0]"r"(&bp_tmp_g[N_CCS*s->reductiona]),
-           [bp_tmp_g1]"r"(&bp_tmp_g[N_CCS*s->reductiona+1]),
-           [bp_tmp_g2]"r"(&bp_tmp_g[N_CCS*s->reductiona+2]),
-           [stride]"r"(8),  [stride_ex]"r"(2*8)
+        __RT_SSSR_SCFGWI(%[bp],         2,    __RT_SSSR_REG_RPTR_0)
+        :: [len]"r"(N_CCS-1), [lenbp]"r"(s->reductionlen-1), [bp]"r"(&bp[i])
         : "memory", "zero", "a6", "fa1"
     );
-    unsigned int i = s-> reductiona;
-    for(; i < s->reductiona + s->reductionlen; i++) {
-        // adder tree
-        // Assuming N_CCS = 8
-        bp[i] += ((bp_tmp_g[N_CCS*i+0] + bp_tmp_g[N_CCS*i+1]) +
-                  (bp_tmp_g[N_CCS*i+2] + bp_tmp_g[N_CCS*i+3])) +
-                 ((bp_tmp_g[N_CCS*i+4] + bp_tmp_g[N_CCS*i+5]) +
-                  (bp_tmp_g[N_CCS*i+6] + bp_tmp_g[N_CCS*i+7]));
+    while( i+1 < s-> reductiona + s->reductionlen ){
+        double val1;
+        double val2;
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[bp0],  0,    __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[bp1],  1,    __RT_SSSR_REG_RPTR_0)
+            "fadd.d  %[val1], ft2, ft0          \n"
+            "fadd.d  ft3, %[zero], ft0          \n"
+            "fadd.d  %[val2], ft2, ft1          \n"
+            "fadd.d  ft4, %[zero], ft1          \n"
+
+            "frep.o  %[len],       4, 0, 0      \n"
+            "fadd.d  %[val1], %[val1], ft0      \n"
+            "fadd.d  ft3, ft3, ft0              \n"
+            "fadd.d  %[val2], %[val2], ft1      \n"
+            "fadd.d  ft4, ft4, ft1              \n"
+
+            "fadd.d  %[val1], %[val1], ft3      \n"
+            "fadd.d  %[val2], %[val2], ft4      \n"
+            :  [val1]"=f"(val1), [val2]"=f"(val2)
+            :  [len]"r"(N_CCS/2-2), [bp0]"r"(&bp_tmp_g[N_CCS*i]), [bp1]"r"(&bp_tmp_g[N_CCS*(i+1)]),
+               [zero]"f"(0.0)
+            : "memory", "ft3", "ft4"
+        );
+        bp[i] = val1;
+        bp[i+1] = val2;
+        i+=2;
     }
-    //asm volatile(
-    //    __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
-    //    :: [stride]"r"(8) : "memory"
-    //);
+    if( i < s-> reductiona + s->reductionlen ){
+        #if N_CCS!=8
+        #warning N_CCS must be 8 for the here optimized binary reduction tree
+        #endif
+        double val;
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len], 31,    __RT_SSSR_REG_BOUND_0 )
+            __RT_SSSR_SCFGWI(%[bp0],  0,    __RT_SSSR_REG_RPTR_0  )
+            __RT_SSSR_SCFGWI(%[bp1],  1,    __RT_SSSR_REG_RPTR_0  )
+            "fadd.d  ft3,     ft0, ft1      \n"
+            "fadd.d  ft4,     ft0, ft1      \n"
+            "fadd.d  ft5,     ft0, ft1      \n"
+            "fadd.d  %[val],  ft0, ft1      \n"
+            "fadd.d  ft3,     ft3, ft2      \n"
+
+            "fadd.d  ft4,     ft4, ft5      \n"
+            "fadd.d  %[val], %[val], ft3    \n"
+            "fadd.d  %[val], %[val], ft4    \n"
+            :  [val]"=f"(val)
+            :  [len]"r"(N_CCS/2-1), [zero]"f"(0.0),
+               [bp0]"r"(&bp_tmp_g[N_CCS*i]), [bp1]"r"(&bp_tmp_g[N_CCS*i+4])
+            : "memory", "ft3","ft4","ft5"
+        );
+        bp[i] = val;
+    }
+    __RT_SSSR_BLOCK_END
 }
 #else
 void collist_lsolve(Collist const * s, int core_id) {
