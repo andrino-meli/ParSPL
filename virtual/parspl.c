@@ -10,6 +10,7 @@
 double * const bp_avoid_wall_bound_err = bp_tmp;
 double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
 
+#if defined PARSPL
 void solve(int core_id){
     asm volatile("_solve: \n":::);
     unsigned int argidx = argstruct_coreoffset[core_id];
@@ -57,6 +58,7 @@ void solve(int core_id){
         }
     }
 }
+#endif
 
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
@@ -83,7 +85,7 @@ void permute(int core_id) {
     __RT_SSSR_BLOCK_END
     }
 }
-#else
+#elif ! defined SSSR && defined PARSPL
 void permute(int core_id) {
     //__RT_SEPERATOR for clean measurement have it outside.
     if (core_id < N_CCS){
@@ -96,7 +98,7 @@ void permute(int core_id) {
 
 // Permute back bp to x: x = P_ermute^T*bp
 // TODO: make lin sys library
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void permuteT(int core_id) {
     asm volatile("_permuteT: \n":::);
     if (core_id < N_CCS){
@@ -123,7 +125,8 @@ void permuteT(int core_id) {
         __RT_SEPERATOR
     }
 }
-#else
+#endif
+#if defined PARSPL && ! defined SSSR
 void permuteT(int core_id) {
     __RT_SEPERATOR
     if (core_id < N_CCS){
@@ -135,7 +138,7 @@ void permuteT(int core_id) {
 #endif
 
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void diag_inv_mult(int core_id) {
     asm volatile("_diag_inv_mult: \n":::);
     // multiply
@@ -174,7 +177,8 @@ void diag_inv_mult(int core_id) {
     );
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if defined PARSPL && ! defined SSSR
 void diag_inv_mult(int core_id) {
     // multiply
     __RT_SEPERATOR
@@ -194,7 +198,7 @@ void diag_inv_mult(int core_id) {
 #endif
 
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void diaginv_lsolve(Diaginv const * s){
     asm volatile("_diaginv_lsolve: \n":::);
     // iterate through the rows
@@ -256,7 +260,8 @@ void diaginv_lsolve(Diaginv const * s){
     );
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if defined PARSPL && ! defined SSSR
 void diaginv_lsolve(Diaginv const * s){
     // iterate through the rows
     __RT_SEPERATOR
@@ -284,8 +289,7 @@ void diaginv_lsolve(Diaginv const * s){
 }
 #endif
 
-
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void diaginv_ltsolve(Diaginv const * s){
     asm volatile("_diaginv_ltsolve: \n":::);
     // The first row in FE and the last column in BS can be neglected
@@ -384,7 +388,8 @@ void diaginv_ltsolve(Diaginv const * s){
     );
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if defined PARSPL && ! defined SSSR
 void diaginv_ltsolve(Diaginv const * s){
     // The first row in FE and the last column in BS can be neglected
     // as multiplication with it is just the identity.
@@ -416,7 +421,7 @@ void diaginv_ltsolve(Diaginv const * s){
 #endif
 
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void collist_lsolve(Collist const * s, int core_id) {
     asm volatile("_collist_lsolve: \n":::);
     __RT_SSSR_BLOCK_BEGIN
@@ -563,7 +568,8 @@ void collist_lsolve(Collist const * s, int core_id) {
     }
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if ! defined SSSR && defined PARSPL
 void collist_lsolve(Collist const * s, int core_id) {
     // pos array to index over ri, rx
     unsigned int pos = 0; 
@@ -595,7 +601,7 @@ void collist_lsolve(Collist const * s, int core_id) {
 }
 #endif
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void collist_ltsolve(Collist const * s) {
     asm volatile("_collist_ltsolve: \n":::);
     __RT_SSSR_BLOCK_BEGIN
@@ -645,7 +651,8 @@ void collist_ltsolve(Collist const * s) {
     }
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if defined PARSPL && ! defined SSSR
 void collist_ltsolve(Collist const * s) {
     // pos array to index over ri, rx
     int pos = 0;
@@ -666,7 +673,7 @@ void collist_ltsolve(Collist const * s) {
 }
 #endif
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 // sadly we would need 4 SSSR streams to make this work fully!
 // instead we stream twice and store intermed. in bp_cph
 void mapping_lsolve(Mapping const * s, int core_id) {
@@ -702,7 +709,8 @@ void mapping_lsolve(Mapping const * s, int core_id) {
     );
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if ! defined SSSR && defined PARSPL
 void mapping_lsolve(Mapping const * s, int core_id) {
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->assigned_data; i++){
@@ -716,7 +724,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
 #endif
 
 
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void mapping_ltsolve(Mapping const * s, int core_id) {
     asm volatile("_mapping_ltsolve: \n":::);
     uint32_t len = s->assigned_data -1;
@@ -750,7 +758,8 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
     );
     __RT_SSSR_BLOCK_END
 }
-#else
+#endif
+#if ! defined SSSR && defined PARSPL
 void mapping_ltsolve(Mapping const * s, int core_id) {
     __RT_SEPERATOR
     for(unsigned int i = 0; i < s->assigned_data; i++){
@@ -761,3 +770,48 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
     }
 }
 #endif
+
+#ifdef SOLVE_CSC
+// single core linear system solution using CSC matrix format
+void solve_csc() {
+    // WARNING: implemented to not use permutations
+    // QDLDL_Lsolve: Solves (L+I)x = b
+    for(unsigned int i = 0; i < LINSYS_N-1; i++){
+        double val = b[i];
+        for(unsigned int j = Lp[i]; j < Lp[i+1]; j++){
+            b[Li[j]] -= Lx[j]*val;
+        }
+    }
+    __rt_get_timer();
+    // Diaginv_mult
+    for(unsigned int i = 0; i < LINSYS_N; i++) {
+        b[i] *= Dinv[i];
+    }
+    __rt_get_timer();
+    // QDLDL_Ltsolve: Solves (L+I)'x = b
+    for(int i = LINSYS_N - 2; i>=0; i--){
+        double val = b[i];
+        for(unsigned int j = Lp[i]; j < Lp[i+1]; j++){
+            if(i == 0){
+                printf("val = %f",val);
+            }
+            val -= Lx[j]*b[Li[j]];
+        }
+        b[i] = val;
+    }
+    // copy over result
+    for(unsigned int i = 0; i < LINSYS_N; i++) {
+        x[i] = b[i];
+    }
+}
+#endif
+
+// parallel linear system solution using CSC matrix format
+void psolve_csc(int core_id) {
+
+}
+
+// parallel linear system solution using CSC matrix format employing level scheduling
+void perm_psolve_csc(int core_id) {
+
+}

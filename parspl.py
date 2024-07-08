@@ -229,6 +229,7 @@ def optimize_tiles(tiles,n,args):
                 for p in self.parent:
                     ph += str(p.tile) + ', '
                 return f'Node{self.tile} {self.level} -> child:[{ch}] parent:[{ph}]'
+                #return f'Node{self.tile} {self.level} '
         tree = [Node(t) for t in tile_list]
         # build dependency tree
         for s in tree:
@@ -320,6 +321,7 @@ def optimize_tiles(tiles,n,args):
         levels = alap_level(tree)
         assert len(tile_list) == len(list_flatten(levels))
         levels = optimize_level(levels)
+        print_levels(levels)
         tile_list = []
         for l in levels:
             for node in l:
@@ -564,12 +566,19 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         fc = open(workc,'w')
 
         # includes and defines
+        if args.parspl:
+            fh.write(f'#define PARSPL \n\n')
+            fh.write(f'#define PERMUTATE \n\n')
+        elif args.solve_csc:
+            fh.write(f'#define SOLVE_CSC \n\n')
+            permutation = None
         fc.write('#include "workspace.h"\n\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
         fh.write(f'#define FIRST_BP ({firstbp})\n\n')
         fh.write(f'#define LAST_BP ({lastbp})\n\n')
+         
 
         # create golden model: M @ x_golden = bp
         # Determine M matrix depending on the verification case
@@ -589,6 +598,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             print(M.toarray())
 
 
+
         fc.write(f'// verification of {args.case}\n')
         # b
         b = M @ x_gold
@@ -596,8 +606,18 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         # golden
         ndarrayToCH(fc,fh,'XGOLD',x_gold,section='')
         ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold,section='')
-        # Perm
+
+        # CSC format data
+        if args.solve_csc:
+            Lp = list2array(linsys.Lp,'Lp',base=32)
+            Li = list2array(linsys.Li,'Li',base=32)
+            Lx = np.array(linsys.Lx,dtype=np.float64)
+            ndarrayToCH(fc,fh,'Lp',Lp)
+            ndarrayToCH(fc,fh,'Li',Li)
+            ndarrayToCH(fc,fh,'Lx',Lx)
+
         Dinv = 1/np.array(linsys.D)
+        # Perm
         if permutation is not None:
             perm = np.array(permutation)
             if SSSR:
@@ -954,6 +974,11 @@ def main(args):
         DEBUG = True
         general.DEBUG = True
         plt.ion()
+
+    args.parspl = True # default
+    if args.solve_csc:
+        args.parspl = False
+
     case = 'solve'
     if args.lsolve:
         case = 'lsolve'
@@ -961,6 +986,8 @@ def main(args):
         case = 'ltsolve'
     elif args.solve:
         case = 'solve'
+    if case != 'solve' and not args.parspl:
+        raise NotImplementedError('All other solving methods other than parspl do not support running FE or BS exclusively.')
     args.case = case
 
     filename = f'{args.wd}/src/{args.test}.json'
@@ -1233,6 +1260,8 @@ parser.add_argument('--numerical_analysis', action='store_true',
     help='Working directory.')
 parser.add_argument('--alap', action='store_true',
     help='As Late As possible scheduling in optimization.')
+parser.add_argument('--solve_csc', action='store_true',
+    help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
 
 
 if __name__ == '__main__':

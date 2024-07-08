@@ -2,7 +2,17 @@
 #define KERNEL_H
 #include <stdint.h>
 
+// parspl linear system solution
 void solve(int core_id);
+
+// single core linear system solution using CSC matrix format
+void solve_csc();
+
+// parallel linear system solution using CSC matrix format
+void psolve_csc(int core_id);
+
+// parallel linear system solution using CSC matrix format employing level scheduling
+void perm_psolve_csc(int core_id);
 
 typedef struct {
     const unsigned int n;         // shape(mat) = (n,n)

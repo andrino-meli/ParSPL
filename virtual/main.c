@@ -37,7 +37,11 @@ int verify() {
 
     for(int j = 0; j < LINSYS_N; j++){
         // Access x in permutated order to be alligns with the plots.
+        #ifdef PERMUTATE
         int i = Perm[j];
+        #else
+        int i = j;
+        #endif
         // absolute error
         double err = (double)x[i] - XGOLD[i];
         double abserr = ( err >= 0 ) ? err : -err;
@@ -78,7 +82,6 @@ int verify() {
 }
 
 
-
 //int smain(uint32_t core_id, uint32_t core_num) {
 int smain(uint32_t core_id) {
 // for verification purposes have different solve stages.
@@ -93,10 +96,22 @@ int smain(uint32_t core_id) {
         );
     }
 #endif
+
+// Run the linear system solver of choice
+#ifdef PARSPL
     permute(core_id);
     solve(core_id);
     permuteT(core_id);
+#elif defined SOLVE_CSC
+    if (core_id == 0) {
+        solve_csc();
+    }
+#else
+    #error no solution method for the linear system is specified at preprocessing
+#endif
+
     __RT_SEPERATOR
+    // Verify the result
     if (core_id == 0) {
         return verify();
     }
