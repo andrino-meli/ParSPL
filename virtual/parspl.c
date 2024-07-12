@@ -62,7 +62,7 @@ void solve(int core_id){
 
 // Permute b to bp (b permuted)
 // TODO: make lin sys library: indirection copy
-#ifdef SSSR
+#if defined SSSR && defined PARSPL
 void permute(int core_id) {
     asm volatile("_permute%=: \n":::);
     if (core_id < N_CCS){
@@ -789,27 +789,84 @@ void solve_csc() {
     }
     __rt_get_timer();
     // QDLDL_Ltsolve: Solves (L+I)'x = b
+    x[LINSYS_N-1] = b[LINSYS_N-1]; // copy over result
     for(int i = LINSYS_N - 2; i>=0; i--){
         double val = b[i];
         for(unsigned int j = Lp[i]; j < Lp[i+1]; j++){
-            if(i == 0){
-                printf("val = %f",val);
-            }
-            val -= Lx[j]*b[Li[j]];
+            val -= Lx[j]*x[Li[j]];
         }
-        b[i] = val;
-    }
-    // copy over result
-    for(unsigned int i = 0; i < LINSYS_N; i++) {
-        x[i] = b[i];
+        x[i] = val;
     }
 }
 #endif
 
+#ifdef PSOLVE_CSC
+double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
+
 // parallel linear system solution using CSC matrix format
 void psolve_csc(int core_id) {
+    // Lsolve
+    if(core_id == 8){ // DMA
+        for(int i = 0; i < LINSYS_N-1; i++){ // also emit barrier loads
+            __rt_barrier();
+        }
+    } else {
+        for(int i = 0; i < LINSYS_N-1; i++){
+            double val = b[i];
+            for(unsigned int j = Lp[i] + core_id; j < Lp[i+1]; j+=N_CCS){
+                b[Li[j]] -= Lx[j]*val;
+            }
+            __rt_fpu_fence_full(); 
+            __rt_barrier();
+        }
+    }
 
+    __rt_get_timer();
+    // diag inv mult
+    if(core_id != N_CCS){
+        for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
+            b[i] *= Dinv[i];
+        }
+        __rt_fpu_fence_full();
+    }
+    __rt_barrier();
+    __rt_get_timer();
+
+    // Ltsolve: (L+I)'x = b
+    if(core_id == 0){
+        x[LINSYS_N-1] = b[LINSYS_N-1];
+        __rt_fpu_fence_full();
+    }
+    __rt_barrier();
+    if(core_id == N_CCS){ // DMA management
+//#pragma nounroll
+        for(int i = LINSYS_N-2; i>=0; i--){
+            __rt_barrier(); // also emit barrier loads
+            __rt_barrier();
+        }
+    } else {
+        for(int i = LINSYS_N - 2; i>=0; i--){
+            double val = 0;
+            for(unsigned int j = Lp[i]+core_id; j < Lp[i+1]; j+=N_CCS) {
+                val -= Lx[j]*x[Li[j]];
+            }
+            FanInVal[core_id] = val;
+            __rt_fpu_fence_full();
+            __rt_barrier();
+            // Fan in updates to x[i], least bussy core does reg.
+            if(core_id == N_CCS-1) {
+                double accu = 0;
+                for(int i = 0; i < N_CCS; i++){
+                    accu += FanInVal[i];
+                }
+                x[i] = b[i] + accu;
+            }
+            __rt_fpu_fence_full();
+            __rt_barrier();
+        }
+    }
 }
+#endif
 
 // parallel linear system solution using CSC matrix format employing level scheduling
 void perm_psolve_csc(int core_id) {

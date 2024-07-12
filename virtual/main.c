@@ -105,7 +105,12 @@ int smain(uint32_t core_id) {
 #elif defined SOLVE_CSC
     if (core_id == 0) {
         solve_csc();
+    } else {
+        __rt_get_timer();
+        __rt_get_timer();
     }
+#elif defined PSOLVE_CSC
+    psolve_csc(core_id);
 #else
     #error no solution method for the linear system is specified at preprocessing
 #endif

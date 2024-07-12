@@ -10,7 +10,7 @@ from matplotlib.patches import Patch
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
-from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping
+from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping, CscTile
 from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array, list_flatten
 import general
@@ -572,6 +572,9 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         elif args.solve_csc:
             fh.write(f'#define SOLVE_CSC \n\n')
             permutation = None
+        elif args.psolve_csc:
+            fh.write(f'#define PSOLVE_CSC \n\n')
+            permutation = None
         fc.write('#include "workspace.h"\n\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
@@ -608,9 +611,9 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold,section='')
 
         # CSC format data
-        if args.solve_csc:
+        if args.solve_csc or args.psolve_csc:
             Lp = list2array(linsys.Lp,'Lp',base=32)
-            Li = list2array(linsys.Li,'Li',base=32)
+            Li = list2array(linsys.Li,'Li',base=16)
             Lx = np.array(linsys.Lx,dtype=np.float64)
             ndarrayToCH(fc,fh,'Lp',Lp)
             ndarrayToCH(fc,fh,'Li',Li)
@@ -976,7 +979,7 @@ def main(args):
         plt.ion()
 
     args.parspl = True # default
-    if args.solve_csc:
+    if args.solve_csc or args.psolve_csc:
         args.parspl = False
 
     case = 'solve'
@@ -1143,33 +1146,44 @@ def main(args):
         live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
 
     if args.schedule or args.codegen:
-        cuts = read_cuts(args.test,args.wd)
-        bprint(f'\nCutting at: ',end='')
-        print(*cuts)
-        print("L matrix to cut & schedule:", L)
-        tiles = tile_L(L,cuts) # structured tiles
-        assign_kernel_to_tile(tiles)
-        tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n,args) #unstructure tiles
-        bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
-        schedule_fe,schedule_bs = schedule_to_workers(tile_list)
-        if args.schedule:
-            print('\n## Forward Elimination ##')
-            print_schedule(schedule_fe)
-            s_offset = len(schedule_fe)
-            print('\n## Dinv vector-vector scaling ##')
-            print(f'synch. step {s_offset}:')
-            print('\n## Backward Substitution ##')
-            print_schedule(schedule_bs,s_offset=s_offset+1)
-        if args.interactive_schedule:
-            interactive_plot_schedule(L,schedule_fe,cuts)
-        elif args.plot:
-            plot_schedule(L,schedule_fe,cuts)
+        if args.parspl:
+            cuts = read_cuts(args.test,args.wd)
+            bprint(f'\nCutting at: ',end='')
+            print(*cuts)
+            print("L matrix to cut & schedule:", L)
+            tiles = tile_L(L,cuts) # structured tiles
+            assign_kernel_to_tile(tiles)
+            tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n,args) #unstructure tiles
+            bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
+            schedule_fe,schedule_bs = schedule_to_workers(tile_list)
+            if args.schedule:
+                print('\n## Forward Elimination ##')
+                print_schedule(schedule_fe)
+                s_offset = len(schedule_fe)
+                print('\n## Dinv vector-vector scaling ##')
+                print(f'synch. step {s_offset}:')
+                print('\n## Backward Substitution ##')
+                print_schedule(schedule_bs,s_offset=s_offset+1)
+            if args.interactive_schedule:
+                interactive_plot_schedule(L,schedule_fe,cuts)
+            elif args.plot:
+                plot_schedule(L,schedule_fe,cuts)
+        elif args.solve_csc:
+            cuts = None
+            schedule_fe = [[Empty(0,0,0,0) for h in range(HARTS)]]
+            schedule_bs = [[Empty(0,0,0,0) for h in range(HARTS)]]
+            schedule_fe[0][0] = CscTile(linsys)
+            schedule_bs[0][0] = CscTile(linsys)
+        elif args.psolve_csc:
+            cuts = None
+            schedule_fe = [[CscTile(linsys) for h in range(HARTS)]]
+            schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
     elif args.plot:
        (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
        plot_cuts(args.test,ax,L.n,wd=args.wd)
        plt.show()
 
-    if args.codegen:
+    if args.codegen and args.parspl:
         codegenSolver(args,schedule_fe,schedule_bs,cuts)
 
         # check that permutation is actually permuting anything
@@ -1182,6 +1196,9 @@ def main(args):
         #perm,permT = permT,perm
         print(f'Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h')
         writeWorkspaceToFile(args,linsys,firstbp=firstbp,lastbp=lastbp,permutation=perm)
+
+    if args.solve_csc or args.psolve_csc:
+        writeWorkspaceToFile(args,linsys)
 
     # Dump files
     if args.dumpbuild:
@@ -1262,7 +1279,8 @@ parser.add_argument('--alap', action='store_true',
     help='As Late As possible scheduling in optimization.')
 parser.add_argument('--solve_csc', action='store_true',
     help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
-
+parser.add_argument('--psolve_csc', action='store_true',
+    help='Specify this to generate code for the multi-core FE & BS using the common CSC matrix representation.')
 
 if __name__ == '__main__':
     argcomplete.autocomplete(parser)

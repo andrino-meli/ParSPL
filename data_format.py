@@ -108,6 +108,14 @@ class Tile:
             plotobjs.append(txt)
         return plotobjs
 
+
+class CscTile(Tile):
+    def __init__(self,linsys):
+        super().__init__(0,linsys.n,0,linsys.n)
+        self.lenlx = len(linsys.Lx)
+    def nnz(self):
+        return self.lenlx
+
 class Collist(Tile,dict):
     # dictionary containting data:
     #  key is the column number
