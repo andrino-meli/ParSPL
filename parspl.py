@@ -18,7 +18,6 @@ import general
 np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
-SSSR = True
 
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
@@ -566,21 +565,23 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         fc = open(workc,'w')
 
         # includes and defines
+        if args.sssr:
+            fh.write(f'#define SSSR \n')
         if args.parspl:
-            fh.write(f'#define PARSPL \n\n')
-            fh.write(f'#define PERMUTATE \n\n')
+            fh.write(f'#define PARSPL \n')
+            fh.write(f'#define PERMUTATE \n')
         elif args.solve_csc:
-            fh.write(f'#define SOLVE_CSC \n\n')
+            fh.write(f'#define SOLVE_CSC \n')
             permutation = None
         elif args.psolve_csc:
-            fh.write(f'#define PSOLVE_CSC \n\n')
+            fh.write(f'#define PSOLVE_CSC \n')
             permutation = None
-        fc.write('#include "workspace.h"\n\n')
+        fc.write('#include "workspace.h"\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
-        fh.write(f'#define LINSYS_N ({linsys.n})\n\n')
-        fh.write(f'#define FIRST_BP ({firstbp})\n\n')
-        fh.write(f'#define LAST_BP ({lastbp})\n\n')
+        fh.write(f'#define LINSYS_N ({linsys.n})\n')
+        fh.write(f'#define FIRST_BP ({firstbp})\n')
+        fh.write(f'#define LAST_BP ({lastbp})\n')
          
 
         # create golden model: M @ x_golden = bp
@@ -623,7 +624,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         # Perm
         if permutation is not None:
             perm = np.array(permutation)
-            if SSSR:
+            if args.sssr:
                 def lenstart_schedule(total,name,lenmo=True):
                     len_perm = []
                     start_perm = []
@@ -1277,6 +1278,8 @@ parser.add_argument('--numerical_analysis', action='store_true',
     help='Working directory.')
 parser.add_argument('--alap', action='store_true',
     help='As Late As possible scheduling in optimization.')
+parser.add_argument('--sssr', action='store_true',
+    help='Use Sparse Streaming Semantic Register hardware accelerations.')
 parser.add_argument('--solve_csc', action='store_true',
     help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
 parser.add_argument('--psolve_csc', action='store_true',

@@ -3,8 +3,8 @@
 #include "runtime.h"
 #include "scheduled_data.h"
 
-#ifdef __RT_SSSR_ENABLE
-#define SSSR
+#if defined __RT_SSSR_ENABLE && !defined SSSR
+#warning SSSRs are available but not utilized!
 #endif
 
 double * const bp_avoid_wall_bound_err = bp_tmp;
