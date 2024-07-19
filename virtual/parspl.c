@@ -774,6 +774,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
 #ifdef SOLVE_CSC
 // single core linear system solution using CSC matrix format
 void solve_csc() {
+    asm volatile("_solve_csc_FE: \n":::);
     // WARNING: implemented to not use permutations
     // QDLDL_Lsolve: Solves (L+I)x = b
     for(unsigned int i = 0; i < LINSYS_N-1; i++){
@@ -784,10 +785,12 @@ void solve_csc() {
     }
     __rt_get_timer();
     // Diaginv_mult
+    asm volatile("_solve_csc_Diaginv: \n":::);
     for(unsigned int i = 0; i < LINSYS_N; i++) {
         b[i] *= Dinv[i];
     }
     __rt_get_timer();
+    asm volatile("_solve_csc_BS: \n":::);
     // QDLDL_Ltsolve: Solves (L+I)'x = b
     x[LINSYS_N-1] = b[LINSYS_N-1]; // copy over result
     for(int i = LINSYS_N - 2; i>=0; i--){
@@ -805,6 +808,7 @@ double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
 // parallel linear system solution using CSC matrix format
 void psolve_csc(int core_id) {
+    asm volatile("_psolve_csc_FE: \n":::);
     // Lsolve
     if(core_id == 8){ // DMA
         for(int i = 0; i < LINSYS_N-1; i++){ // also emit barrier loads
@@ -823,6 +827,7 @@ void psolve_csc(int core_id) {
 
     __rt_get_timer();
     // diag inv mult
+    asm volatile("_psolve_csc_Diaginv: \n":::);
     if(core_id != N_CCS){
         for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
             b[i] *= Dinv[i];
@@ -832,6 +837,7 @@ void psolve_csc(int core_id) {
     __rt_barrier();
     __rt_get_timer();
 
+    asm volatile("_psolve_csc_BS: \n":::);
     // Ltsolve: (L+I)'x = b
     if(core_id == 0){
         x[LINSYS_N-1] = b[LINSYS_N-1];
@@ -869,6 +875,11 @@ void psolve_csc(int core_id) {
 #endif
 
 // parallel linear system solution using CSC matrix format employing level scheduling
-void perm_psolve_csc(int core_id) {
+//void perm_psolve_csc(int core_id) {
+//
+//}
+
+
+void sssr_psolve_csc(int core_id) {
 
 }

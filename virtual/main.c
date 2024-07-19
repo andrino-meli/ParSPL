@@ -32,6 +32,7 @@
 
 
 int verify() {
+    asm volatile("_verify: \n":::);
     double maxerr = 0;
     double maxrelerr = 0;
 
