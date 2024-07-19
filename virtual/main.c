@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "runtime.h"   // for runtime barrier
+#include "types.h"
 #include "parspl.h"   // for lsolve, ltsolve, solve
 #include "workspace.h" // for access to x, GOLD, GOLD_INV
 #include "print_float.h"

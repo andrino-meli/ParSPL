@@ -4,6 +4,7 @@
 
 #include <pthread.h>
 #include "runtime.h"
+#include "types.h"
 
 // ----- Runtime substitutes -----
 pthread_barrier_t barr_all;

@@ -1,6 +1,7 @@
 #ifndef  KERNEL_H
 #define KERNEL_H
 #include <stdint.h>
+#include "types.h"
 
 // parspl linear system solution
 void solve(int core_id);
