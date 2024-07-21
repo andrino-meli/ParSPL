@@ -14,24 +14,22 @@
  * limitations under the License.
  *
  * SPDX-License-Identifier: Apache-2.0
- * Author: Andrino Meli (adinolp.xp@gmail.com, moroa@ethz.ch)
+ * Author: Andrino Meli (moroa@ethz.ch)
  */
 
 #include <stdint.h>
-//#include <math.h>
 
 #include "runtime.h"   // for runtime barrier
-//#include "parspl.h"   // for lsolve, ltsolve, solve
-//#include "workspace.h" // for access to x, GOLD, GOLD_INV
-//#include "print_float.h"
+#include "parspl.h"   // for lsolve, ltsolve, solve
+#include "workspace.h" // for access to x, GOLD, GOLD_INV
+#include "print_float.h"
 
-#define TOL (1e2) // require the error to be less than 1%
+#define TOL (0.5e2) // require the error to be less than 2%
 
 #ifdef __RT_SSSR_ENABLE
 #define SSSR
 #endif
 
-/*
 int verify() {
     asm volatile("_verify: \n":::);
     double maxerr = 0;
@@ -54,10 +52,16 @@ int verify() {
         #ifdef VERBOSE
         printf("prow %d:\t\tgold %.3e, x %.3e,\terr %.3e,\tabsrel %.3f%%\trow %d\n",
                 j, XGOLD[i], x[i], err, absrel*100, i);
-        #elif PRINTF
-        printf("prow %d:\t\tx ",j);
+        #elif defined PRINTF
+        printf("prow %d:\t\tgold ",j);
+        printFloat(XGOLD[i]);
+        printf(", x  ");
         printFloat(x[i]);
-        printf("\n");
+        printf(", err  ");
+        printFloat(err);
+        printf(", abserr  ");
+        printFloat(absrel*100);
+        printf("%%\trow %d\n",i);
         #endif
         if (maxrelerr < absrel) {
             maxrelerr = absrel;
@@ -76,6 +80,8 @@ int verify() {
         #ifdef SOLVE
         printf("\nVERIFICATION of ldlsolve:\n");
         #endif
+    #endif
+    #ifdef VERBOSE
     printf(" Maximum absolute error %e\n", maxrelerr);
     printf(" Maximum relative error %e\n", maxerr);
     printf(" Thread 0 will return max rel err in %%\n");
@@ -83,123 +89,10 @@ int verify() {
     return (int)(maxrelerr*TOL);
 }
 
-int verify_lxisone() {
-    double maxerr = 0;
-    double maxrelerr = 0;
-
-    for(int i = 0; i < QP_N + QP_M; i++){
-        // absolute error
-        double err = (double)bp[i] - GOLDEN_LXISONE[i];
-        double abserr = ( err >= 0 ) ? err : -err;
-        if (maxerr < abserr) maxerr = abserr;
-        // relative error
-        double relerr = err*GOLDEN_LXISONE_INV[i];
-        double absrel = ( relerr >= 0 ) ? relerr : -relerr;
-        if (maxrelerr < absrel) maxrelerr = absrel;
-    }
-    return (int)(maxrelerr*TOL);
-}
-*/
-
-void print_vecd(char* name, int len, double* x){
-    printf("\n %s = [",name);
-    for(int i = 0; i < len; i++){
-        printFloat((float)x[i]);
-        printf(", ");
-        if ( i % 10 == 0 ) printf("\n");
-    }
-    printf("]\n");
-}
-
-const double INF = 1.0/0.0;
-const double NEGINF = -1.0/0.0;
-
-
-int check_vecd(char* name, int len, double* x){
-    asm volatile("_check_nan_vecd: \n":::);
-    printf("Checking %s for NaN values.\n",name);
-    int correct = 0;
-    for(int i = 0; i < len; i++){
-        if(is_nan(x[i])){
-            printf("Error: got Nan in %s at index: %d\n",name, i);
-            correct = 79123;
-        }
-    }
-    return correct;
-}
-
-int is_inf(double x) {
-    return x == INF;
-}
-
-int is_neginf(double x) {
-    return x == NEGINF;
-}
-
-int is_nan(double x) {
-    double y = 0.5;
-    asm volatile("_is_nan%=: ":[x]"+f"(x)::);
-    return x != y;
-}
-
-int smain(uint32_t core_id, uint32_t core_num) {
-    double x = 0.0/0.0;
-    if(core_id == 0) {
-        int isinf = is_inf(x);
-        int isneginf = is_neginf(x);
-        int isnan = is_nan(x);
-        if(isnan) {
-            printf("Error: got Nan\n");
-        }
-        if(isinf) {
-            printf("Error: got inf\n");
-        }
-        if(isneginf) {
-            printf("Error: got -inf\n");
-        }
-        if(isinf || isneginf || isnan){
-            return 77777;
-        } else {
-            return 0; 
-        }
-    }
-}
-
-    // initialize b=1. b is stored in x as we solve inplace.
-    //if (core_id == 0) {
-    //    int r = check_nan_vecd("bp", 192, bp);
-    //    if (!r) return r;
-    //}
-    //for(int i = core_id; i < QP_N+QP_M; i+=9) {
-    //    bp[i] = 1.0;
-    //}
-    //__rt_fpu_fence_full();
-    //__rt_barrier();
-
-    //__rt_get_timer();
-    //if (core_id == 0) {
-    //    int r = check_nan_vecd("bp", 192, bp);
-    //    if (!r) return r;
-    //}
-    //asm volatile("_Lsolve: \n":::);
-    //SSSR_PQDLDL_Lsolve(core_id);
-    //asm volatile("_Lsolve2: \n":::);
-    //if (core_id == 0) {
-    //    int r = check_nan_vecd("bp", 192, bp);
-    //    if (!r) return r;
-    //}
-    //__rt_get_timer();
-    //if (core_id == 0) return verify_lxisone();
-
-/*
-//int smain(uint32_t core_id, uint32_t core_num) {
- // for verification purposes have different solvers defined by preprocessor
 int smain(uint32_t core_id) {
-    for(int i = core_id; i < QP_N+QP_M; i+=core_num) {
-        bp[i] = 1.0;
-    }
+// for verification purposes have different solve stages.
     __RT_SEPERATOR //for clean measurement have it outside.
-#if defined SSSR && undefined SSSR_PSOLVE_CSC
+#ifdef SSSR
     if (core_id < N_CCS) {
         asm volatile(
             __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
@@ -213,8 +106,10 @@ int smain(uint32_t core_id) {
 // Run the linear system solver of choice
 #ifdef PARSPL
     permute(core_id);
+    // code generation determines wether ro run Lsolve, Ltsolve or both
     solve(core_id);
     permuteT(core_id);
+    __RT_SEPERATOR
 #elif defined SOLVE_CSC
     if (core_id == 0) {
         solve_csc();
@@ -222,20 +117,33 @@ int smain(uint32_t core_id) {
         __rt_get_timer();
         __rt_get_timer();
     }
+    __RT_SEPERATOR
 #elif defined PSOLVE_CSC
     psolve_csc(core_id);
+    __RT_SEPERATOR
 #elif defined SSSR_PSOLVE_CSC
+    #ifdef SOLVE
     sssr_psolve_csc(core_id);
+    #elif defined LSOLVE
+    SSSR_PQDLDL_Lsolve(core_id);
+    #elif defined LTSOLVE
+    SSSR_PQDLDL_Ltsolve(core_id);
+    #endif
+    __RT_SEPERATOR
+    // copy over result as sssr_Psolve_csc solves inplace in b and not into x
+    if (core_id == 0) { for(int i = 0; i < LINSYS_N; i++) x[i] = b[i]; }
 #else
     #error no solution method for the linear system is specified at preprocessing
 #endif
-
-    __RT_SEPERATOR
     // Verify the result
     if (core_id == 0) {
+        asm volatile("_check_for_nan_or_inf: \n":::);
+        int r = is_normal_vec(x,192);
+        if (!r) {
+            //printf("Error: b is not normal after SSSR Lsolve!\n");
+            return 7777;
+        }
         return verify();
     }
-    // all other cores return 4242
-    return 4242;
+    return 4242; // all other cores return 4242
 }
-*/

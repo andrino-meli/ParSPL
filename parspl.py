@@ -990,8 +990,8 @@ def main(args):
         case = 'ltsolve'
     elif args.solve:
         case = 'solve'
-    if case != 'solve' and not args.parspl:
-        raise NotImplementedError('All other solving methods other than parspl do not support running FE or BS exclusively.')
+    if case != 'solve' and not args.parspl and not args.sssr_psolve_csc:
+        raise NotImplementedError('All other solving methods other than parspl and sssr_psolve_csc do not support running FE or BS exclusively. (simple to add though.')
     args.case = case
 
     filename = f'{args.wd}/src/{args.test}.json'
