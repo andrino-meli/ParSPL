@@ -82,12 +82,46 @@ int verify() {
     return (int)(maxrelerr*TOL);
 }
 
+int verify_lxisone() {
+    double maxerr = 0;
+    double maxrelerr = 0;
 
+    for(int i = 0; i < QP_N + QP_M; i++){
+        // absolute error
+        double err = (double)bp[i] - GOLDEN_LXISONE[i];
+        double abserr = ( err >= 0 ) ? err : -err;
+        if (maxerr < abserr) maxerr = abserr;
+        // relative error
+        double relerr = err*GOLDEN_LXISONE_INV[i];
+        double absrel = ( relerr >= 0 ) ? relerr : -relerr;
+        if (maxrelerr < absrel) maxrelerr = absrel;
+    }
+    return (int)(maxrelerr*TOL);
+}
+
+int smain(uint32_t core_id, uint32_t core_num) {
+    // initialize b=1. b is stored in x as we solve inplace.
+    for(int i = core_id; i < QP_N+QP_M; i+=9) {
+        bp[i] = 1.0;
+    }
+    __rt_fpu_fence_full();
+    __rt_barrier();
+
+    __rt_get_timer();
+    SSSR_PQDLDL_Lsolve(core_id);
+    __rt_get_timer();
+    if (core_id == 0) return verify_lxisone();
+}
+
+/*
 //int smain(uint32_t core_id, uint32_t core_num) {
+ // for verification purposes have different solvers defined by preprocessor
 int smain(uint32_t core_id) {
-// for verification purposes have different solve stages.
+    for(int i = core_id; i < QP_N+QP_M; i+=core_num) {
+        bp[i] = 1.0;
+    }
     __RT_SEPERATOR //for clean measurement have it outside.
-#ifdef SSSR
+#if defined SSSR && undefined SSSR_PSOLVE_CSC
     if (core_id < N_CCS) {
         asm volatile(
             __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
@@ -112,6 +146,8 @@ int smain(uint32_t core_id) {
     }
 #elif defined PSOLVE_CSC
     psolve_csc(core_id);
+#elif defined SSSR_PSOLVE_CSC
+    sssr_psolve_csc(core_id);
 #else
     #error no solution method for the linear system is specified at preprocessing
 #endif
@@ -124,3 +160,4 @@ int smain(uint32_t core_id) {
     // all other cores return 4242
     return 4242;
 }
+*/

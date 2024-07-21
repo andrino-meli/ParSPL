@@ -1,5 +1,3 @@
-#ifndef  KERNEL_H
-#define KERNEL_H
 #include <stdint.h>
 
 // parspl linear system solution
@@ -96,5 +94,3 @@ void mapping_ltsolve(Mapping const * s, int core_id);
 /* 
  * Solves: M^Tx = bp inplace
  */
-
-#endif
