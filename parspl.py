@@ -19,55 +19,6 @@ np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
 
-def workload_distribute_L(newLp,newLi,newLx,dtype_x=np.float64):
-    LpStart = [] # Offset into Lx.
-    LpLenTmp = [ list() for i in range(HARTS) ]
-    LxNewTmp = [ list() for i in range(HARTS) ]
-    LiNewTmp = [ list() for i in range(HARTS) ]
-    for i in range(len(newLp)-2):
-        tmp = int(newLp[i+1] - newLp[i])
-        jobs = tmp // HARTS
-        leftover = tmp % HARTS
-        # compute how many jobs each core has to do and append the correspoding
-        #  data to LxNew and LiNew.
-        for core_id in range(HARTS):
-            tmp = -1
-            if (leftover != 0 and leftover > core_id):
-                tmp = jobs+1
-            else:
-                tmp = jobs
-            #LpStart.append( len(LxNew) if tmp > 0 else -1 )
-            LpLenTmp[core_id].append(tmp)
-            index = [t*(HARTS) + core_id for t in range(tmp)]
-            halalu = [] # tmp for blocked Lx data
-            for l in index:
-                    halalu.append(newLx[l+newLp[i]])
-            LxNewTmp[core_id].extend(halalu)
-            tmparr = [newLi[l+newLp[i]] for l in index]
-            LiNewTmp[core_id].extend(tmparr)
-    LpLen = []; LxNew = []; LiNew = []; LpLenSum = []; LiNewR = []
-    for i in range(HARTS):
-        LpLen.extend(LpLenTmp[i])
-        LpLenSum.append(sum(LpLenTmp[i]))
-        LxNew.extend(LxNewTmp[i])
-        LiNew.extend(LiNewTmp[i])
-        LiNewTmp[i].reverse()
-        LiNewR.extend(LiNewTmp[i])
-    LpStart = [0]
-    for i in range(HARTS):
-        LpStart.append(LpLenSum[i]+LpStart[i])
-    print(f'inflating Lp to LpLen increasing size from {len(newLp)} to {len(LpStart)+len(LpLen)}.')
-    print(f'Average length in LpLen is {sum(LpLen)/len(LpLen)}')
-    # convert to numpy arrays
-    LpStart = list2array(LpStart,'LpStart',base=32)
-    LpLenSum = list2array(LpLenSum,'LpLenSum',base=32)
-    LpLen = list2array(LpLen,'LpLen',base=8)
-    LiNew = list2array(LiNew,'LiNew',base=16)
-    LiNewR = list2array(LiNewR,'LiNewR',base=16)
-    LxNew = np.array(LxNew,dtype=dtype_x)
-
-    return (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR)
-
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
 
@@ -625,10 +576,6 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         elif args.psolve_csc:
             fh.write(f'#define PSOLVE_CSC \n')
             permutation = None
-        elif args.sssr_psolve_csc:
-            fh.write(f'#define SSSR \n')
-            fh.write(f'#define SSSR_PSOLVE_CSC \n')
-            permutation = None
         fc.write('#include "workspace.h"\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
@@ -665,16 +612,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold,section='')
 
         # CSC format data
-        if args.sssr_psolve_csc:
-            ddll = workload_distribute_L(linsys.Lp,linsys.Li,linsys.Lx)
-            (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR) = ddll 
-            ndarrayToCH(fc,fh,'LpStart',LpStart)
-            ndarrayToCH(fc,fh,'LpLen',LpLen)
-            ndarrayToCH(fc,fh,'LpLenSum',LpLenSum)
-            ndarrayToCH(fc,fh,'LxNew',LxNew)
-            ndarrayToCH(fc,fh,'LiNew',LiNew)
-            ndarrayToCH(fc,fh,'LiNewR',LiNewR)
-        elif args.solve_csc or args.psolve_csc:
+        if args.solve_csc or args.psolve_csc:
             Lp = list2array(linsys.Lp,'Lp',base=32)
             Li = list2array(linsys.Li,'Li',base=16)
             Lx = np.array(linsys.Lx,dtype=np.float64)
@@ -1042,7 +980,7 @@ def main(args):
         plt.ion()
 
     args.parspl = True # default
-    if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
+    if args.solve_csc or args.psolve_csc:
         args.parspl = False
 
     case = 'solve'
@@ -1237,7 +1175,7 @@ def main(args):
             schedule_bs = [[Empty(0,0,0,0) for h in range(HARTS)]]
             schedule_fe[0][0] = CscTile(linsys)
             schedule_bs[0][0] = CscTile(linsys)
-        elif args.psolve_csc or args.sssr_psolve_csc:
+        elif args.psolve_csc:
             cuts = None
             schedule_fe = [[CscTile(linsys) for h in range(HARTS)]]
             schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
@@ -1260,7 +1198,7 @@ def main(args):
         print(f'Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h')
         writeWorkspaceToFile(args,linsys,firstbp=firstbp,lastbp=lastbp,permutation=perm)
 
-    if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
+    if args.solve_csc or args.psolve_csc:
         writeWorkspaceToFile(args,linsys)
 
     # Dump files
@@ -1346,8 +1284,6 @@ parser.add_argument('--solve_csc', action='store_true',
     help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
 parser.add_argument('--psolve_csc', action='store_true',
     help='Specify this to generate code for the multi-core FE & BS using the common CSC matrix representation.')
-parser.add_argument('--sssr_psolve_csc', action='store_true',
-    help='Specify this to generate code for the multi-core FE & BS using a distributed version of CSC optimized for SSSRs.')
 
 if __name__ == '__main__':
     argcomplete.autocomplete(parser)
