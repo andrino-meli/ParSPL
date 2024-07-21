@@ -18,11 +18,12 @@
  */
 
 #include <stdint.h>
+//#include <math.h>
 
 #include "runtime.h"   // for runtime barrier
-#include "parspl.h"   // for lsolve, ltsolve, solve
-#include "workspace.h" // for access to x, GOLD, GOLD_INV
-#include "print_float.h"
+//#include "parspl.h"   // for lsolve, ltsolve, solve
+//#include "workspace.h" // for access to x, GOLD, GOLD_INV
+//#include "print_float.h"
 
 #define TOL (1e2) // require the error to be less than 1%
 
@@ -30,7 +31,7 @@
 #define SSSR
 #endif
 
-
+/*
 int verify() {
     asm volatile("_verify: \n":::);
     double maxerr = 0;
@@ -98,20 +99,97 @@ int verify_lxisone() {
     }
     return (int)(maxrelerr*TOL);
 }
+*/
+
+void print_vecd(char* name, int len, double* x){
+    printf("\n %s = [",name);
+    for(int i = 0; i < len; i++){
+        printFloat((float)x[i]);
+        printf(", ");
+        if ( i % 10 == 0 ) printf("\n");
+    }
+    printf("]\n");
+}
+
+const double INF = 1.0/0.0;
+const double NEGINF = -1.0/0.0;
+
+
+int check_vecd(char* name, int len, double* x){
+    asm volatile("_check_nan_vecd: \n":::);
+    printf("Checking %s for NaN values.\n",name);
+    int correct = 0;
+    for(int i = 0; i < len; i++){
+        if(is_nan(x[i])){
+            printf("Error: got Nan in %s at index: %d\n",name, i);
+            correct = 79123;
+        }
+    }
+    return correct;
+}
+
+int is_inf(double x) {
+    return x == INF;
+}
+
+int is_neginf(double x) {
+    return x == NEGINF;
+}
+
+int is_nan(double x) {
+    double y = 0.5;
+    asm volatile("_is_nan%=: ":[x]"+f"(x)::);
+    return x != y;
+}
 
 int smain(uint32_t core_id, uint32_t core_num) {
-    // initialize b=1. b is stored in x as we solve inplace.
-    for(int i = core_id; i < QP_N+QP_M; i+=9) {
-        bp[i] = 1.0;
+    double x = 0.0/0.0;
+    if(core_id == 0) {
+        int isinf = is_inf(x);
+        int isneginf = is_neginf(x);
+        int isnan = is_nan(x);
+        if(isnan) {
+            printf("Error: got Nan\n");
+        }
+        if(isinf) {
+            printf("Error: got inf\n");
+        }
+        if(isneginf) {
+            printf("Error: got -inf\n");
+        }
+        if(isinf || isneginf || isnan){
+            return 77777;
+        } else {
+            return 0; 
+        }
     }
-    __rt_fpu_fence_full();
-    __rt_barrier();
-
-    __rt_get_timer();
-    SSSR_PQDLDL_Lsolve(core_id);
-    __rt_get_timer();
-    if (core_id == 0) return verify_lxisone();
 }
+
+    // initialize b=1. b is stored in x as we solve inplace.
+    //if (core_id == 0) {
+    //    int r = check_nan_vecd("bp", 192, bp);
+    //    if (!r) return r;
+    //}
+    //for(int i = core_id; i < QP_N+QP_M; i+=9) {
+    //    bp[i] = 1.0;
+    //}
+    //__rt_fpu_fence_full();
+    //__rt_barrier();
+
+    //__rt_get_timer();
+    //if (core_id == 0) {
+    //    int r = check_nan_vecd("bp", 192, bp);
+    //    if (!r) return r;
+    //}
+    //asm volatile("_Lsolve: \n":::);
+    //SSSR_PQDLDL_Lsolve(core_id);
+    //asm volatile("_Lsolve2: \n":::);
+    //if (core_id == 0) {
+    //    int r = check_nan_vecd("bp", 192, bp);
+    //    if (!r) return r;
+    //}
+    //__rt_get_timer();
+    //if (core_id == 0) return verify_lxisone();
 
 /*
 //int smain(uint32_t core_id, uint32_t core_num) {
