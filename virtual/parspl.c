@@ -880,7 +880,7 @@ void psolve_csc(int core_id) {
 double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
 void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
-    asm volatile("_sssr_psolve_csc_BS%=: \n":::);
+  asm volatile("_sssr_psolve_cscBS: \n":::);
     if(core_id >= N_CCS){ // DMA management
 #pragma nounroll // avoid L1 cache overflow
         for(int i = LINSYS_N-2; i>=0; i--){
@@ -996,6 +996,7 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
     }
   }
   else { // computation
+    asm volatile("_sssr_psolve_cscFE: \n":::);
     __RT_SSSR_BLOCK_BEGIN
     uint32_t base = LpStart[core_id]; // !! don't type change
     asm volatile( // SSSR constant config
@@ -1081,21 +1082,48 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
 void sssr_psolve_csc(int core_id) {
     // FE
     SSSR_PQDLDL_Lsolve(core_id);
-    __rt_fpu_fence_full();
-    __rt_barrier();
-    __rt_get_timer();
+    //__rt_fpu_fence_full();
+    //__rt_barrier();
+    //__rt_get_timer();
 
     // diag inv mult
-    asm volatile("_sssr_psolve_csc_DiagInv: \n":::);
     if(core_id < N_CCS){
-        for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
-            b[i] *= Dinv[i];
-        }
+        //for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
+        //    b[i] *= Dinv[i];
+        //}
+        //__rt_fpu_fence_full();
+        __RT_SSSR_BLOCK_BEGIN
+        asm volatile("_diag_inv_mult: \n":::);
+        // multiply
+        uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
+        double* bp_start = &b[start_perm[core_id]];
+        double* dinv_start = &Dinv[start_perm[core_id]];
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+
+            __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
+            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+            "csrr    zero,0x7c2                  \n" // __rt_barrier();
+            __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
+            "csrr zero, mcycle                   \n"
+            "frep.o     %[len], 1, 1, 0      \n"
+            "fmul.d  ft0, ft1, ft2             \n"
+            //bp[i] *= Dinv[i];
+            :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start)
+            : "memory", "zero", "a6", "fa1"
+        );
+        __RT_SSSR_BLOCK_END
         __rt_fpu_fence_full();
+    } else{
+        __rt_barrier();
+        __rt_get_timer();
     }
-    __rt_barrier();
-    __rt_get_timer();
 
     // BS
+    __rt_barrier();
+    __rt_get_timer();
     SSSR_PQDLDL_Ltsolve(core_id);
 }
+#endif

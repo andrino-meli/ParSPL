@@ -19,6 +19,56 @@ np.random.seed(0)
 CAT_CMD = 'bat'
 DEBUG = False
 
+def workload_distribute_L(newLp,newLi,newLx):
+    dtype_x = np.float64
+    LpStart = [] # Offset into Lx.
+    LpLenTmp = [ list() for i in range(HARTS) ]
+    LxNewTmp = [ list() for i in range(HARTS) ]
+    LiNewTmp = [ list() for i in range(HARTS) ]
+    for i in range(len(newLp)-2):
+        tmp = int(newLp[i+1] - newLp[i])
+        jobs = tmp // HARTS
+        leftover = tmp % HARTS
+        # compute how many jobs each core has to do and append the correspoding
+        #  data to LxNew and LiNew.
+        for core_id in range(HARTS):
+            tmp = -1
+            if (leftover != 0 and leftover > core_id):
+                tmp = jobs+1
+            else:
+                tmp = jobs
+            #LpStart.append( len(LxNew) if tmp > 0 else -1 )
+            LpLenTmp[core_id].append(tmp)
+            index = [t*(HARTS) + core_id for t in range(tmp)]
+            halalu = [] # tmp for blocked Lx data
+            for l in index:
+                halalu.append(newLx[l+newLp[i]])
+            LxNewTmp[core_id].extend(halalu)
+            tmparr = [newLi[l+newLp[i]] for l in index]
+            LiNewTmp[core_id].extend(tmparr)
+    LpLen = []; LxNew = []; LiNew = []; LpLenSum = []; LiNewR = []
+    for i in range(HARTS):
+        LpLen.extend(LpLenTmp[i])
+        LpLenSum.append(sum(LpLenTmp[i]))
+        LxNew.extend(LxNewTmp[i])
+        LiNew.extend(LiNewTmp[i])
+        LiNewTmp[i].reverse()
+        LiNewR.extend(LiNewTmp[i])
+    LpStart = [0]
+    for i in range(HARTS):
+        LpStart.append(LpLenSum[i]+LpStart[i])
+    print(f'inflating Lp to LpLen increasing size from {len(newLp)} to {len(LpStart)+len(LpLen)}.')
+    print(f'Average length in LpLen is {sum(LpLen)/len(LpLen)}')
+    # convert to numpy arrays
+    LpStart = list2array(LpStart,'LpStart',base=32)
+    LpLenSum = list2array(LpLenSum,'LpLenSum',base=32)
+    LpLen = list2array(LpLen,'LpLen',base=8)
+    LiNew = list2array(LiNew,'LiNew',base=16)
+    LiNewR = list2array(LiNewR,'LiNewR',base=16)
+    LxNew = np.array(LxNew,dtype=dtype_x)
+
+    return (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR)
+
 def find_optimal_cuts(linsys,levels):
     raise NotImplemented("")
 
@@ -570,18 +620,21 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
         if args.parspl:
             fh.write(f'#define PARSPL \n')
             fh.write(f'#define PERMUTATE \n')
+            fh.write(f'#define FIRST_BP ({firstbp})\n')
+            fh.write(f'#define LAST_BP ({lastbp})\n')
         elif args.solve_csc:
             fh.write(f'#define SOLVE_CSC \n')
             permutation = None
         elif args.psolve_csc:
             fh.write(f'#define PSOLVE_CSC \n')
             permutation = None
+        elif args.sssr_psolve_csc:
+            fh.write(f'#define SSSR_PSOLVE_CSC \n')
+            permutation = None
         fc.write('#include "workspace.h"\n')
         fh.write('#include <stdint.h>\n')
         fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n')
-        fh.write(f'#define FIRST_BP ({firstbp})\n')
-        fh.write(f'#define LAST_BP ({lastbp})\n')
          
 
         # create golden model: M @ x_golden = bp
@@ -619,26 +672,37 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             ndarrayToCH(fc,fh,'Lp',Lp)
             ndarrayToCH(fc,fh,'Li',Li)
             ndarrayToCH(fc,fh,'Lx',Lx)
+        elif args.sssr_psolve_csc:
+            lldd = workload_distribute_L(linsys.Lp,linsys.Li,linsys.Lx)
+            (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR) = lldd
+            ndarrayToCH(fc,fh,'LpStart',LpStart)
+            ndarrayToCH(fc,fh,'LpLen',LpLen)
+            ndarrayToCH(fc,fh,'LpLenSum',LpLenSum)
+            ndarrayToCH(fc,fh,'LxNew',LxNew)
+            ndarrayToCH(fc,fh,'LiNew',LiNew)
+            ndarrayToCH(fc,fh,'LiNewR',LiNewR)
 
         Dinv = 1/np.array(linsys.D)
         # Perm
+        if args.sssr:
+            # originally only used for permutation but now also used for scheduling
+            #  any vector operation (of length total) with SSSRs.
+            def lenstart_schedule(total,name,lenmo=True):
+                len_perm = []
+                start_perm = []
+                for h in range(HARTS):
+                    l = (HARTS - 1 + total - h) // HARTS
+                    if lenmo: #if length minus one
+                        start_perm.append(sum(len_perm)+h)
+                        len_perm.append(l-1) # frep/sssr length uses length - 1
+                    else:
+                        start_perm.append(sum(len_perm))
+                        len_perm.append(l)
+                ndarrayToCH(fc,fh,f'start_{name}',list2array(start_perm,f'start_{name}',base=32))
+                ndarrayToCH(fc,fh,f'len_{name}',list2array(len_perm,f'len_{name}',base=32))
+            lenstart_schedule(linsys.n,'perm')
         if permutation is not None:
             perm = np.array(permutation)
-            if args.sssr:
-                def lenstart_schedule(total,name,lenmo=True):
-                    len_perm = []
-                    start_perm = []
-                    for h in range(HARTS):
-                        l = (HARTS - 1 + total - h) // HARTS
-                        if lenmo: #if length minus one
-                            start_perm.append(sum(len_perm)+h)
-                            len_perm.append(l-1) # frep/sssr length uses length - 1
-                        else:
-                            start_perm.append(sum(len_perm))
-                            len_perm.append(l)
-                    ndarrayToCH(fc,fh,f'start_{name}',list2array(start_perm,f'start_{name}',base=32))
-                    ndarrayToCH(fc,fh,f'len_{name}',list2array(len_perm,f'len_{name}',base=32))
-                lenstart_schedule(linsys.n,'perm')
             ndarrayToCH(fc,fh,'Perm',perm)
             ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
             # bp, bp_copy
@@ -980,7 +1044,7 @@ def main(args):
         plt.ion()
 
     args.parspl = True # default
-    if args.solve_csc or args.psolve_csc:
+    if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
         args.parspl = False
 
     case = 'solve'
@@ -993,6 +1057,10 @@ def main(args):
     if case != 'solve' and not args.parspl and not args.sssr_psolve_csc:
         raise NotImplementedError('All other solving methods other than parspl and sssr_psolve_csc do not support running FE or BS exclusively. (simple to add though.')
     args.case = case
+
+    if args.sssr_psolve_csc:
+        args.sssr = True
+
 
     filename = f'{args.wd}/src/{args.test}.json'
     cutfile = f'{args.wd}/src/{args.test}.cut'
@@ -1175,7 +1243,7 @@ def main(args):
             schedule_bs = [[Empty(0,0,0,0) for h in range(HARTS)]]
             schedule_fe[0][0] = CscTile(linsys)
             schedule_bs[0][0] = CscTile(linsys)
-        elif args.psolve_csc:
+        elif args.psolve_csc or args.sssr_psolve_csc:
             cuts = None
             schedule_fe = [[CscTile(linsys) for h in range(HARTS)]]
             schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
@@ -1198,7 +1266,7 @@ def main(args):
         print(f'Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h')
         writeWorkspaceToFile(args,linsys,firstbp=firstbp,lastbp=lastbp,permutation=perm)
 
-    if args.solve_csc or args.psolve_csc:
+    if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
         writeWorkspaceToFile(args,linsys)
 
     # Dump files
@@ -1210,16 +1278,17 @@ def main(args):
             wprint('Linking without regenerating code')
         bprint('\nLinking generated code to virtual verification environment')
         wd = args.wd
-        links = [
-        f'ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h',
-        f'ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c',
-        f'ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h' ]
+        links = [ f'rm -f {wd}/virtual/scheduled_data.h', f'rm -f {wd}/virtual/workspace.c', f'rm -f {wd}/virtual/workspace.h']
+        if args.parspl:
+            links.append(f'ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h')
+        else:
+            links.append(f'touch {wd}/virtual/scheduled_data.h') #dummy
+
+        links.append(f'ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c')
+        links.append(f'ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h')
         for l in links:
             print(l)
             subprocess.run(l,shell=True,check=True)
-
-    if DEBUG:
-        breakpoint()
 
     return vars()
 
@@ -1284,6 +1353,8 @@ parser.add_argument('--solve_csc', action='store_true',
     help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
 parser.add_argument('--psolve_csc', action='store_true',
     help='Specify this to generate code for the multi-core FE & BS using the common CSC matrix representation.')
+parser.add_argument('--sssr_psolve_csc', action='store_true',
+    help='psolve_csc with SSSRs')
 
 if __name__ == '__main__':
     argcomplete.autocomplete(parser)
