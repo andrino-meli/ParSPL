@@ -939,7 +939,7 @@ void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
                 );
             } else {
                 __rt_barrier();
-                libase += 2*(len+1);
+                //libase += 2*(len+1);
                 len = *lentop - 1;
                 // shadow configure SSSR's
                 asm volatile( __RT_SSSR_SCFGWI(%[len], 1, __RT_SSSR_REG_BOUND_0)
@@ -994,8 +994,8 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
     for(unsigned int i = 0; i < LINSYS_N-1; i++) {
       __rt_barrier();
     }
+    return;
   }
-  else { // computation
     asm volatile("_sssr_psolve_cscFE: \n":::);
     __RT_SSSR_BLOCK_BEGIN
     uint32_t base = LpStart[core_id]; // !! don't type change
@@ -1016,19 +1016,18 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
     uint8_t len = *lenarr;
     for( ; lenarr < &LpLen[(LINSYS_N-1)*(core_id + 1) ]; ){
       if (len != 0) {
-        //
         if(write_stream == 0){
             asm volatile(
                 "addi %[len], %[len], -1 \n"
                 // shadow configure SSSR's
                 __RT_SSSR_SCFGWI(%[len], 31, __RT_SSSR_REG_BOUND_0)
-                __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
                 __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_WPTR_INDIR)
                 "fmv.x.w a6, fa0                 \n" //_rt_fpu_fence_full();
                 "mv zero, a6                     \n" //_rt_fpu_fence_full();
                 "lbu         a5,1(%[lenarr])     \n" // has a high load latency
                 "csrr    zero,0x7c2              \n" // __rt_barrier();
                 "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
                 "frep.o     %[len], 1, 1, 0      \n"
                 "fnmsub.d   ft0, ft2, ft3, ft1   \n"
                 "addi %[base], %[base], 1        \n" // because len is actually len-1
@@ -1046,13 +1045,13 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
                 "addi %[len], %[len], -1 \n"
                 // shadow configure SSSR's
                 __RT_SSSR_SCFGWI(%[len], 31, __RT_SSSR_REG_BOUND_0)
-                __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_RPTR_INDIR)
                 __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_WPTR_INDIR)
                 "fmv.x.w a6, fa0                 \n" //_rt_fpu_fence_full();
                 "mv zero, a6                     \n" //_rt_fpu_fence_full();
                 "lbu         a5,1(%[lenarr])     \n" // has a high load latency
                 "csrr    zero,0x7c2              \n" // __rt_barrier();
                 "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_RPTR_INDIR)
                 "frep.o     %[len], 1, 1, 0      \n"
                 "fnmsub.d   ft1, ft2, ft3, ft0   \n"
                 "addi %[base], %[base], 1        \n" // because len is actually len-1
@@ -1075,7 +1074,6 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
       }
     }
     __RT_SSSR_BLOCK_END
-  }
 }
 
 // User is responsible to synchronize after this function call !!!

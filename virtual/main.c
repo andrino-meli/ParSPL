@@ -24,7 +24,7 @@
 #include "workspace.h" // for access to x, GOLD, GOLD_INV
 #include "print_float.h"
 
-#define TOL (0.5e2) // require the error to be less than 2%
+#define TOL (1e2) // require the error to be less than 1%
 
 #ifdef __RT_SSSR_ENABLE
 #define SSSR
@@ -82,9 +82,9 @@ int verify() {
         #endif
     #endif
     #ifdef VERBOSE
-    printf(" Maximum absolute error %e\n", maxrelerr);
-    printf(" Maximum relative error %e\n", maxerr);
-    printf(" Thread 0 will return max rel err in %%\n");
+    printf(" Maximum abs. rel. error %e\n", maxrelerr);
+    int tol = TOL;
+    printf(" Thread 0 will return max rel err. TOl = %d\n",tol);
     #endif
     return (int)(maxrelerr*TOL);
 }
