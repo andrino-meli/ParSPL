@@ -7,8 +7,10 @@
 #warning SSSRs are available but not utilized!
 #endif
 
+#if defined PARSPL
 double * const bp_avoid_wall_bound_err = bp_tmp;
 double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
+#endif
 
 #if defined PARSPL
 void solve(int core_id){
@@ -774,6 +776,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
 #ifdef SOLVE_CSC
 // single core linear system solution using CSC matrix format
 void solve_csc() {
+    asm volatile("_solve_csc_FE: \n":::);
     // WARNING: implemented to not use permutations
     // QDLDL_Lsolve: Solves (L+I)x = b
     for(unsigned int i = 0; i < LINSYS_N-1; i++){
@@ -784,10 +787,12 @@ void solve_csc() {
     }
     __rt_get_timer();
     // Diaginv_mult
+    asm volatile("_solve_csc_Diaginv: \n":::);
     for(unsigned int i = 0; i < LINSYS_N; i++) {
         b[i] *= Dinv[i];
     }
     __rt_get_timer();
+    asm volatile("_solve_csc_BS: \n":::);
     // QDLDL_Ltsolve: Solves (L+I)'x = b
     x[LINSYS_N-1] = b[LINSYS_N-1]; // copy over result
     for(int i = LINSYS_N - 2; i>=0; i--){
@@ -805,6 +810,7 @@ double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
 // parallel linear system solution using CSC matrix format
 void psolve_csc(int core_id) {
+    asm volatile("_psolve_csc_FE: \n":::);
     // Lsolve
     if(core_id == 8){ // DMA
         for(int i = 0; i < LINSYS_N-1; i++){ // also emit barrier loads
@@ -823,6 +829,7 @@ void psolve_csc(int core_id) {
 
     __rt_get_timer();
     // diag inv mult
+    asm volatile("_psolve_csc_Diaginv: \n":::);
     if(core_id != N_CCS){
         for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
             b[i] *= Dinv[i];
@@ -832,6 +839,7 @@ void psolve_csc(int core_id) {
     __rt_barrier();
     __rt_get_timer();
 
+    asm volatile("_psolve_csc_BS: \n":::);
     // Ltsolve: (L+I)'x = b
     if(core_id == 0){
         x[LINSYS_N-1] = b[LINSYS_N-1];
@@ -868,7 +876,252 @@ void psolve_csc(int core_id) {
 }
 #endif
 
-// parallel linear system solution using CSC matrix format employing level scheduling
-void perm_psolve_csc(int core_id) {
+#if defined SSSR_PSOLVE_CSC
+double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
+void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
+  asm volatile("_sssr_psolve_cscBS: \n":::);
+    if(core_id >= N_CCS){ // DMA management
+#pragma nounroll // avoid L1 cache overflow
+        for(int i = LINSYS_N-2; i>=0; i--){
+            __rt_barrier(); // also emit barrier loads
+            __rt_barrier();
+        }
+    } else {
+        uint32_t top = LpStart[core_id+1]-1;
+        __RT_SSSR_BLOCK_BEGIN
+        asm volatile( // SSSR constant config
+        __RT_SSSR_SCFGWI(%[icfg], 1, __RT_SSSR_REG_IDX_CFG)
+        __RT_SSSR_SCFGWI(%[b], 1, __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[streamlen], 2, __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[stride], 2, __RT_SSSR_REG_STRIDE_0)
+        __RT_SSSR_SCFGWI(%[lxbase], 2, __RT_SSSR_REG_RPTR_0)
+        :: [streamlen]"r"(LpLenSum[core_id]-1), [b]"r"(b),
+        [icfg]"r"(__RT_SSSR_IDXSIZE_U16), [stride]"r"(-sizeof(double)),
+        [lxbase]"r"(&LxNew[top])
+        : "memory"
+        );
+        uint8_t* lentop = &LpLen[(LINSYS_N-1)*(core_id + 1) - 1];
+        uint32_t base = LpStart[core_id];
+        uint16_t* libase = &LiNewR[base];
+        int8_t len = *lentop;
+        len--;
+        asm volatile(
+        __RT_SSSR_SCFGWI(%[len], 1, __RT_SSSR_REG_BOUND_0) :: [len]"r"(len) :
+        );
+        lentop--;
+        double* valptr = &b[LINSYS_N-2];
+#pragma nounroll
+        for(; valptr >= b;){
+            register double val = 0;
+            if (len != -1) {
+                asm volatile(
+                "csrr    zero,0x7c2                  \n" // synchronize before loading b[i]s
+                __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
+                "frep.o   %[len], 1, 1, 0            \n"
+                "fmadd.d  %[val], ft1, ft2,%[val]    \n"
+                "fsd      %[val], 0(%[fanin])        \n"
+                "addi    a5, %[len], 1               \n"
+                "lbu     %[len], 0(%[lentop])        \n"
+                "addi    %[lentop], %[lentop], -1    \n"
+                "slli    a5, a5, 1                   \n"
+                "add     %[libase], %[libase], a5    \n"  // increase libase by len*2
+                "addi    %[len], %[len], -1          \n"
+                // shadow configure SSSR's
+                __RT_SSSR_SCFGWI(%[len], 1, __RT_SSSR_REG_BOUND_0)
+                "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+                "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+                "csrr    zero,0x7c2                  \n" // __rt_barrier();
+                : [lentop]"+r"(lentop), [len]"+r"(len), [val]"+f"(val), [libase]"+r"(libase),
+                [b]"+r"(valptr)
+                : [fanin]"r"(&FanInVal[core_id])
+                : "memory", "a6", "a5","fa1"
+                );
+            } else {
+                __rt_barrier();
+                //libase += 2*(len+1);
+                len = *lentop - 1;
+                // shadow configure SSSR's
+                asm volatile( __RT_SSSR_SCFGWI(%[len], 1, __RT_SSSR_REG_BOUND_0)
+                        :: [len]"r"(len) : );
+                lentop--;
+                FanInVal[core_id] = 0;
+                __rt_fpu_fence_full();
+                __rt_barrier();
+            }
+            // Fan in updates to b[i]
+            if(core_id == N_CCS-1) { // least bussy core does reg
+                //for(int j = 0; j < N_CCS-1; j++){
+                //    accu += FanInVal[j];
+                //}
+                //b[i] -= accu;
+                asm volatile(
+                "fld	ft4,0(%[fanin])    \n"
+                "fld	ft5,8(%[fanin])    \n"
+                "fld	ft6,16(%[fanin])   \n"
+                "fld	ft7,24(%[fanin])   \n"
+                "fadd.d	ft4,ft4,ft5        \n" // 0+1
+                "fld	ft8,32(%[fanin])   \n"
+                "fadd.d	ft5,ft6,ft7        \n" // 2+3
+                "fld	ft9,40(%[fanin])   \n"
+                "fld	ft10,48(%[fanin])  \n"
+                "fadd.d	ft6,ft8,ft9        \n" // 4+5
+                "fadd.d ft4,ft4,ft5        \n" // 0+1 + 2+3
+                "fld	ft11,0(%[bvec])      \n"
+                "fadd.d	ft10,ft10,%[val]   \n" // 6+7
+                "fadd.d ft6,ft6,ft4        \n" // 0+1 + 2+3 + 4+5
+                "fsub.d	ft11,ft11,ft10      \n" // bvec[i] - (6+7)
+                "fsub.d	ft11,ft11,ft6      \n" // bvec[i] - all
+                "fsd	ft11,0(%[bvec])      \n"
+                "addi   %[bvec],%[bvec],%[bytes]     \n"
+                : [bvec]"+r"(valptr)
+                : [fanin]"r"(FanInVal), [val]"f"(val), [bytes]"i"(-sizeof(double))
+                : "memory", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11"
+                );
+                __rt_fpu_fence_full();
+            } else {
+                valptr--;
+            }
+            //__rt_barrier();
+        }
+        __RT_SSSR_BLOCK_END
+    }
 }
+
+void SSSR_PQDLDL_Lsolve(uint32_t core_id){
+  if(core_id >= N_CCS){ // DMA management -> last core manages DMA
+    #pragma nounroll
+    for(unsigned int i = 0; i < LINSYS_N-1; i++) {
+      __rt_barrier();
+    }
+    return;
+  }
+    asm volatile("_sssr_psolve_cscFE: \n":::);
+    __RT_SSSR_BLOCK_BEGIN
+    uint32_t base = LpStart[core_id]; // !! don't type change
+    asm volatile( // SSSR constant config
+        __RT_SSSR_SCFGWI(%[icfg], 31, __RT_SSSR_REG_IDX_CFG)
+        __RT_SSSR_SCFGWI(%[b], 1, __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[b], 0, __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[streamlen], 2, __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[stride], 2, __RT_SSSR_REG_STRIDE_0)
+        __RT_SSSR_SCFGWI(%[lxbase], 2, __RT_SSSR_REG_RPTR_0)
+        :: [streamlen]"r"(LpLenSum[core_id]-1), [b]"r"(b), [icfg]"r"(__RT_SSSR_IDXSIZE_U16),
+           [stride]"r"(sizeof(double)), [lxbase]"r"(&LxNew[base]), [libase] "r"(&LiNew[base])
+        : "memory"
+    );
+    double* valptr = b;
+    int write_stream = 0;
+    uint8_t* lenarr = &LpLen[(LINSYS_N-1)*core_id];
+    uint8_t len = *lenarr;
+    for( ; lenarr < &LpLen[(LINSYS_N-1)*(core_id + 1) ]; ){
+      if (len != 0) {
+        if(write_stream == 0){
+            asm volatile(
+                "addi %[len], %[len], -1 \n"
+                // shadow configure SSSR's
+                __RT_SSSR_SCFGWI(%[len], 31, __RT_SSSR_REG_BOUND_0)
+                __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_WPTR_INDIR)
+                "fmv.x.w a6, fa0                 \n" //_rt_fpu_fence_full();
+                "mv zero, a6                     \n" //_rt_fpu_fence_full();
+                "lbu         a5,1(%[lenarr])     \n" // has a high load latency
+                "csrr    zero,0x7c2              \n" // __rt_barrier();
+                "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
+                "frep.o     %[len], 1, 1, 0      \n"
+                "fnmsub.d   ft0, ft2, ft3, ft1   \n"
+                "addi %[base], %[base], 1        \n" // because len is actually len-1
+                "addi       %[valptr],%[valptr], %[bytes]        \n" // valptr++
+                "add %[base], %[base], %[len]    \n"
+                "addi       %[lenarr], %[lenarr], 1     \n"
+                "mv %[len], a5                   \n" // store intermediate load to len
+                : [valptr]"+r"(valptr), [base]"+r"(base), [lenarr]"+r"(lenarr), [len]"+r"(len)
+                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(double))
+                : "memory", "ft3","a6", "a5"
+            );
+            write_stream = 1;
+        } else {
+            asm volatile(
+                "addi %[len], %[len], -1 \n"
+                // shadow configure SSSR's
+                __RT_SSSR_SCFGWI(%[len], 31, __RT_SSSR_REG_BOUND_0)
+                __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_WPTR_INDIR)
+                "fmv.x.w a6, fa0                 \n" //_rt_fpu_fence_full();
+                "mv zero, a6                     \n" //_rt_fpu_fence_full();
+                "lbu         a5,1(%[lenarr])     \n" // has a high load latency
+                "csrr    zero,0x7c2              \n" // __rt_barrier();
+                "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_RPTR_INDIR)
+                "frep.o     %[len], 1, 1, 0      \n"
+                "fnmsub.d   ft1, ft2, ft3, ft0   \n"
+                "addi %[base], %[base], 1        \n" // because len is actually len-1
+                "addi       %[valptr],%[valptr], %[bytes]        \n" // valptr++
+                "add %[base], %[base], %[len]    \n"
+                "addi       %[lenarr], %[lenarr], 1     \n"
+                "mv %[len], a5                   \n" // store intermediate load to len
+                : [valptr]"+r"(valptr), [base]"+r"(base), [lenarr]"+r"(lenarr), [len]"+r"(len)
+                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(double))
+                : "memory", "ft3","a6", "a5"
+            );
+            write_stream = 0;
+        }
+      } else {
+        valptr++;
+        lenarr++;
+        base += len;
+        len = *lenarr;
+        __rt_barrier();
+      }
+    }
+    __RT_SSSR_BLOCK_END
+}
+
+// User is responsible to synchronize after this function call !!!
+void sssr_psolve_csc(int core_id) {
+    // FE
+    SSSR_PQDLDL_Lsolve(core_id);
+    //__rt_fpu_fence_full();
+    //__rt_barrier();
+    //__rt_get_timer();
+
+    // diag inv mult
+    if(core_id < N_CCS){
+        //for(int i = core_id; i < LINSYS_N; i+=N_CCS) {
+        //    b[i] *= Dinv[i];
+        //}
+        //__rt_fpu_fence_full();
+        __RT_SSSR_BLOCK_BEGIN
+        asm volatile("_diag_inv_mult: \n":::);
+        // multiply
+        uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
+        double* bp_start = &b[start_perm[core_id]];
+        double* dinv_start = &Dinv[start_perm[core_id]];
+        asm volatile(
+            __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
+
+            __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
+            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+            "csrr    zero,0x7c2                  \n" // __rt_barrier();
+            __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
+            "csrr zero, mcycle                   \n"
+            "frep.o     %[len], 1, 1, 0      \n"
+            "fmul.d  ft0, ft1, ft2             \n"
+            //bp[i] *= Dinv[i];
+            :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start)
+            : "memory", "zero", "a6", "fa1"
+        );
+        __RT_SSSR_BLOCK_END
+        __rt_fpu_fence_full();
+    } else{
+        __rt_barrier();
+        __rt_get_timer();
+    }
+
+    // BS
+    __rt_barrier();
+    __rt_get_timer();
+    SSSR_PQDLDL_Ltsolve(core_id);
+}
+#endif

@@ -13,7 +13,13 @@ void solve_csc();
 void psolve_csc(int core_id);
 
 // parallel linear system solution using CSC matrix format employing level scheduling
-void perm_psolve_csc(int core_id);
+//void perm_psolve_csc(int core_id);
+
+// SSSR acceleration of parallel linear system solution using CSC matrix format
+// (basically the state of my master thesis)
+void sssr_psolve_csc(int core_id);
+void SSSR_PQDLDL_Lsolve(uint32_t core_id);
+void SSSR_PQDLDL_Ltsolve(uint32_t core_id);
 
 typedef struct {
     const unsigned int n;         // shape(mat) = (n,n)

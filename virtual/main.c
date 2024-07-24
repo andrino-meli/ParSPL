@@ -14,7 +14,7 @@
  * limitations under the License.
  *
  * SPDX-License-Identifier: Apache-2.0
- * Author: Andrino Meli (adinolp.xp@gmail.com, moroa@ethz.ch)
+ * Author: Andrino Meli (moroa@ethz.ch)
  */
 
 #include <stdint.h>
@@ -31,8 +31,8 @@
 #define SSSR
 #endif
 
-
 int verify() {
+    asm volatile("_verify: \n":::);
     double maxerr = 0;
     double maxrelerr = 0;
 
@@ -53,10 +53,16 @@ int verify() {
         #ifdef VERBOSE
         printf("prow %d:\t\tgold %.3e, x %.3e,\terr %.3e,\tabsrel %.3f%%\trow %d\n",
                 j, XGOLD[i], x[i], err, absrel*100, i);
-        #elif PRINTF
-        printf("prow %d:\t\tx ",j);
+        #elif defined PRINTF
+        printf("prow %d:\t\tgold ",j);
+        printFloat(XGOLD[i]);
+        printf(", x  ");
         printFloat(x[i]);
-        printf("\n");
+        printf(", err  ");
+        printFloat(err);
+        printf(", abserr  ");
+        printFloat(absrel*100);
+        printf("%%\trow %d\n",i);
         #endif
         if (maxrelerr < absrel) {
             maxrelerr = absrel;
@@ -75,15 +81,15 @@ int verify() {
         #ifdef SOLVE
         printf("\nVERIFICATION of ldlsolve:\n");
         #endif
-    printf(" Maximum absolute error %e\n", maxrelerr);
-    printf(" Maximum relative error %e\n", maxerr);
-    printf(" Thread 0 will return max rel err in %%\n");
+    #endif
+    #ifdef VERBOSE
+    printf(" Maximum abs. rel. error %e\n", maxrelerr);
+    int tol = TOL;
+    printf(" Thread 0 will return max rel err. TOl = %d\n",tol);
     #endif
     return (int)(maxrelerr*TOL);
 }
 
-
-//int smain(uint32_t core_id, uint32_t core_num) {
 int smain(uint32_t core_id) {
 // for verification purposes have different solve stages.
     __RT_SEPERATOR //for clean measurement have it outside.
@@ -101,8 +107,10 @@ int smain(uint32_t core_id) {
 // Run the linear system solver of choice
 #ifdef PARSPL
     permute(core_id);
+    // code generation determines wether ro run Lsolve, Ltsolve or both
     solve(core_id);
     permuteT(core_id);
+    __RT_SEPERATOR
 #elif defined SOLVE_CSC
     if (core_id == 0) {
         solve_csc();
@@ -110,17 +118,33 @@ int smain(uint32_t core_id) {
         __rt_get_timer();
         __rt_get_timer();
     }
+    __RT_SEPERATOR
 #elif defined PSOLVE_CSC
     psolve_csc(core_id);
+    __RT_SEPERATOR
+#elif defined SSSR_PSOLVE_CSC
+    #ifdef SOLVE
+    sssr_psolve_csc(core_id);
+    #elif defined LSOLVE
+    SSSR_PQDLDL_Lsolve(core_id);
+    #elif defined LTSOLVE
+    SSSR_PQDLDL_Ltsolve(core_id);
+    #endif
+    __RT_SEPERATOR
+    // copy over result as sssr_Psolve_csc solves inplace in b and not into x
+    if (core_id == 0) { for(int i = 0; i < LINSYS_N; i++) x[i] = b[i]; }
 #else
     #error no solution method for the linear system is specified at preprocessing
 #endif
-
-    __RT_SEPERATOR
     // Verify the result
     if (core_id == 0) {
+        asm volatile("_check_for_nan_or_inf: \n":::);
+        int r = is_normal_vec(x,192);
+        if (!r) {
+            //printf("Error: b is not normal after SSSR Lsolve!\n");
+            return 7777;
+        }
         return verify();
     }
-    // all other cores return 4242
-    return 4242;
+    return 4242; // all other cores return 4242
 }

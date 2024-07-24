@@ -4,9 +4,9 @@ VIRT_RT ?= runtime.h
 
 TEST ?= _HPC_3x3_H2
 
-.PHONY: clean link all
+.PHONY: clean all
 
-all: link
+all: codegen
 
 setup:
 	pip3 install argcomplete
@@ -18,7 +18,7 @@ list:
 
 codegen:
 	# Generating code for $(TEST)
-	./parspl.py --test $(TEST) --codegen --link
+	./parspl.py --test $(TEST) --level_thr 3 --alap --codegen --link --sssr
 
 clean:
 	rm -rf build
