@@ -38,7 +38,7 @@ int smain(uint32_t core_id) {
         asm volatile(
             __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
             __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
-            :: [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            :: [stride]"r"(sizeof(FLOAT)), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
             : "memory"
         );
     }
