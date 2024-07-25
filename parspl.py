@@ -898,7 +898,7 @@ def compute_level(L):
     '''
     Lp,Li = (L.Lp,L.Li)
     # compute levels
-    level = np.zeros(L.n)
+    level = np.zeros(L.n,dtype=int)
     for col in range(L.n):
         for k in range(Lp[col],Lp[col+1]):
             level[Li[k]] = max(level[Li[k]],1+level[col])
@@ -910,6 +910,28 @@ def compute_level(L):
         else:
             bins[i] += 1
     return (level,bins)
+
+def heuristic_level_thr(L):
+    '''
+    Heuristica computation of a threshold for partial level scheduling.
+    Columns get only partially level sched if they contain at least 2.5% of the overall amount of columns (matrix dimension).
+    
+    
+    Parameters:
+    L (Csc): Lower triangular matrix in Csc format and zero diagonal.
+
+    Returns:
+    level_thr: So that levels 0 to level level_thr contain at least L.n*0.025 many columns.
+    '''
+    THR = 2.5/100
+    level,bins = compute_level(L)
+    level_thr = 0
+    for l,num in bins.items():
+        level_thr = l # default return last
+        if (num < L.n*THR):
+            level_thr = l-1
+            break
+    return level_thr
 
 
 def level2permutation(level,thr=None):
@@ -1156,10 +1178,14 @@ def main(args):
                 print()
         print()
 
-    if args.level_schedule or args.level_thr is not None:
+    if args.level_schedule or args.level_thr is not None or args.auto_level_thr:
         if args.level_thr is not None:
-            bprint(f"\nLevel schedule only levels up to {args.level_thr}:")
+            bprint(f"\nLevel schedule only levels 0 to {args.level_thr} as MANUALLY SELECTED.")
             PL,perm = incomplete_level_schedule(linsys,args.level_thr, intra_level_reorder=args.intra_level_reorder)
+        elif args.auto_level_thr:
+            level_thr = heuristic_level_thr(linsys)
+            bprint(f"\nLevel schedule only levels 0 to {level_thr} by AUTOMATIC HEURISTIC.")
+            PL,perm = incomplete_level_schedule(linsys,level_thr, intra_level_reorder=args.intra_level_reorder)
         else:
             bprint("\nLevel schedule and permute L matrix:")
             PL,perm = level_schedule(linsys)
@@ -1321,6 +1347,8 @@ parser.add_argument('--level_schedule', action='store_true',
     help='Level schedule and permute L matrix.')
 parser.add_argument('--level_thr', type=int, default=None,
     help='Level threshold for partly level scheduling.')
+parser.add_argument('--auto_level_thr', action='store_true', default=None,
+    help='Automatically find a reasonable threshold and partly level schedule accordingly.')
 parser.add_argument('--occupation', action='store_true',
     help='Compute row/column occupation, so number of elements.')
 parser.add_argument('--intra_level_reorder', action='store_true',
