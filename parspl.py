@@ -100,45 +100,80 @@ class SubBlock:
 
 def sub_nnz(subiter):
     assert(type(subiter) is SubBlock)
+    assert(subiter.cc == subiter.start)
     nnz = 0
     for col,coliter in subiter:
-        nnz += len(coliter)
+        nnz += sum(1 for _ in coliter)
+    subiter.cc = subiter.start # reset iterator (otherwise we would use it up!)
     return nnz
 
-def find_optimal_cuts(L,start,stop,depth=0):
-    MINSIZE = 4
-    Lp,Li,Lx,n = L.Lp, L.Li, L.Lx, L.n
+def sub_dense_size(subiter):
+    dim = subiter.stop-subiter.start
+    return dim*(dim-1)/2
 
-    if not (stop > start+1+MINSIZE):
+def sub_dens(subiter):
+    ''' Compute density of triagonal block in L. '''
+    density = sub_nnz(subiter)/sub_dense_size(subiter)
+    return density
+
+
+def find_optimal_cuts(L,start,stop,depth=0,band=None,minsize=15):
+    DENSITY_THRESHOLD = 0.95
+    # 80% fillin is okay if the triangle is at most 1/6 of the
+    # The fundamental idea here is the smaller the triangle the less we care about the density
+    # So the density per size threshold must be sufficient.
+    DENSITY_SIZE_THRESHOLD = 0.8 / (1/12)
+
+    Lp,Li,Lx,n = L.Lp, L.Li, L.Lx, L.n
+    if (band is None):
+        band = (stop-start)/3
+
+    if not (stop > start+1+minsize):
+        print(f'FOC: stopping at minsize {minsize} for {start}-{stop}')
         return []
 
-    if depth == 2:
+    if depth == 10:
+        wprint(f'FOC: stopping at max recursion depth for {start}-{stop}')
+        return []
+
+    subiter = SubBlock(Lp,Li,Lx,start,stop)
+    density = sub_dens(subiter)
+    relsize = (stop-start)/L.n
+    if density > DENSITY_THRESHOLD:
+        print(f'FOC: stopping at {start}-{stop} for absolute density threshold {DENSITY_THRESHOLD}')
+        return []
+    if density/relsize > DENSITY_SIZE_THRESHOLD:
+        print(f'FOC: stopping at {start}-{stop} for density per relsize threshold {density/relsize}, threshold is {DENSITY_SIZE_THRESHOLD}')
         return []
 
     # define weigh function based on distance between two nodes
     def weight(a,b):
         assert(b>a)
-        w = 1.0**(-(b-a)) 
-        return w
+        # ensure
+        if band is not None and b-a >= band:
+            return 0
+        return 1.0/(-(b-a))**2
 
     # create directed, weighted graph
     def subiter2weighted_graph(subiter,source,sink):
+        G = nx.DiGraph()
+        G.add_nodes_from(range(sink,source+1))
         edges = []
         for col,coliter in subiter:
             for (row,val) in coliter:
-                edge = (row,col,weight(col,row))
-                edges.append(edge)
-        G = nx.DiGraph()
+                w = weight(col,row)
+                if w != 0:
+                    edges.append( (row,col,w) )
         G.add_weighted_edges_from(edges, weight='capacity')
         return G
 
     # create weighted graph
-    subiter = SubBlock(Lp,Li,Lx,start,stop)
     source, sink = stop-1, start
     G = subiter2weighted_graph(subiter,source,sink)
     # calculate min-cut
     cut_value, partition = nx.minimum_cut(G, source, sink, flow_func=nx.algorithms.flow.edmonds_karp)
-    print(partition)
+    #print(f'- depth {depth}, start {start}, stop {stop}')
+    #print(partition)
     # extract cuts
     cuts = set()
     part0,part1 = list(partition[0]),list(partition[1])
@@ -151,16 +186,54 @@ def find_optimal_cuts(L,start,stop,depth=0):
         for i,p in enumerate(part[1:]):
             if(part[i] +1 != p):
                 cuts.add(p)
-    cuts.add(start)
-    cuts.add(stop)
-    cuts = sorted(list(cuts))
-    subcuts = []
-    for a,b in zip(cuts[0:-1],cuts[1:]):
-        nctmp = find_optimal_cuts(L,a,b,depth=depth+1)
-        subcuts.extend(nctmp)
-    cuts.remove(start)
-    cuts.remove(stop)
-    cuts.extend(subcuts)
+    cutstmp = sorted(list(cuts))
+    # from all the cuts choose the one closest to the middleo
+    diffmid = [ abs(c - start - (stop-start)/2) for c in cutstmp]
+    cut = cutstmp[np.argmin(diffmid)]
+    print(f'FOC: from min-cut-set {list(cutstmp)} selecting cut {cut} inbetween {start}-{stop}')
+    # check if cut is worth it. We devide smat into 3 parts:
+    ## ---------------
+    ## | lup  |      |
+    ## ---------------
+    ## | rect | lsub |
+    ## ---------------
+    smat = SubBlock(Lp,Li,Lx,start,stop)
+    smatnnz = sub_nnz(smat)
+    smatfull = sub_dense_size(smat)
+
+    iterlup = SubBlock(Lp,Li,Lx,start,cut)
+    lupnnz = sub_nnz(iterlup)
+    lupfull = sub_dense_size(iterlup)
+
+    itersub = SubBlock(Lp,Li,Lx,cut,stop)
+    lsubnnz = sub_nnz(itersub)
+    lsubfull = sub_dense_size(itersub)
+
+    rectnnz = smatnnz - lupnnz - lsubnnz
+    rectfull = (cut-start)*(stop-cut)
+
+    continue_cutting = False
+    # EITHER cut removes at least 5% of nnz() in smat
+    if (rectfull-rectnnz)/smatfull > 0.05:
+        continue_cutting = True
+    # OR rect and (lsub or lup) is empty
+    if rectnnz == 0 and (lupnnz == 0 or lsubnnz == 0):
+        continue_cutting = True
+    #UNLESS
+    if not continue_cutting:
+        wprint(f'FOC: stopping to dissect {start}-{stop} because of useless cut at {cut} even though DENSITY_SIZE termination criterion is not reached.')
+        return []
+
+
+    # TODO: if an DAG graph based cut does not help AND we still miss the DENSITY_SIZE threshold
+    #       consider using a binary search
+    #       or just cut in the middle (or better maybee top 1/3)
+
+    # recursively cut apart upper and lower
+    cutsu = find_optimal_cuts(L,start,cut,depth=depth+1)
+    cutsl = find_optimal_cuts(L,cut,stop,depth=depth+1)
+    # merge all cuts
+    cuts = [*cutsu,cut,*cutsl]
     return cuts
 
 def verify_cuts(cuts,n):
@@ -923,16 +996,17 @@ def cut2lines(cuts):
         s = s2
     return (x,y)
 
-def plot_cuts(problem,ax,n,wd):
+def plot_cuts(problem,ax,n,wd,cuts=None):
     # read in cuts array
-    cuts = read_cuts(problem,wd)
+    if cuts is None:
+        cuts = read_cuts(problem,wd)
     verify_cuts(cuts,n) # verify + sort
     print(f"redrawing cuts at: {cuts}")
     (x,y) = cut2lines(cuts)
     lines = ax.plot(x,y,color='r',linewidth=1.5)
     return lines
 
-def live_cuts(problem,L,wd,uselx=True):
+def live_cuts(problem,L,wd,uselx=True,cuts=None):
     ''' Live cut matrix visually.'''
     # cuts
     cutfile = f'src/{problem}.cut'
@@ -947,7 +1021,7 @@ def live_cuts(problem,L,wd,uselx=True):
         for l in lines:
             l.remove()
         # read in cuts array
-        lines = plot_cuts(problem,ax,L.n,wd)
+        lines = plot_cuts(problem,ax,L.n,wd,cuts=cuts)
         # redraw
         plt.pause(2)
 
@@ -1300,12 +1374,12 @@ def main(args):
             cuts = [0]
             if level_thr is not None:
                 levels,bins = compute_level(L)
-                for l in range(level_thr):
+                for l in range(level_thr+1):
                     cuts.append(cuts[-1] + bins[l])
                 bprint(f'\nCuts based on partial level scheduling: ',*cuts)
             # heuristically compute cuts based on recursive graph partitioning
             tmpcuts = find_optimal_cuts(L,cuts[-1],L.n)
-            bprint(f'\nCuts based on partial level scheduling: ',*tmpcuts)
+            bprint(f'\nCuts based on heuristic scheduling: ',*tmpcuts)
             # heuristically compute cuts based on recursive graph partitioning
             cuts.extend(tmpcuts)
             cuts.append(L.n)
@@ -1359,7 +1433,7 @@ def main(args):
             schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
     elif args.plot:
        (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
-       plot_cuts(args.test,ax,L.n,wd=args.wd)
+       plot_cuts(args.test,ax,L.n,wd=args.wd,cuts=cuts)
        plt.show()
 
     if args.codegen and args.parspl:
