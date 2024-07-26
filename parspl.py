@@ -7,6 +7,7 @@ from scipy.sparse import csc_matrix
 import scipy.sparse as spa
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+import networkx as nx
 
 from bfloat16 import bfloat16
 from data_format import Csc, Triag
@@ -69,8 +70,98 @@ def workload_distribute_L(newLp,newLi,newLx):
 
     return (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR)
 
-def find_optimal_cuts(linsys,levels):
-    raise NotImplemented("")
+class SubBlock:
+    ''' Iterator class for subparts of the L matrix.'''
+    def __init__(self,Lp,Li,Lx,start,stop):
+        assert(stop > start)
+        assert(start >= 0)
+        assert(len(Lp) > stop)
+        self.start = start
+        self.stop = stop
+        self.Lx = Lx
+        self.Li = Li
+        self.Lp = Lp
+        self.cc = start #current column
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not(self.stop > self.cc):
+            raise StopIteration
+        start = self.Lp[self.cc]
+        end = self.Lp[self.cc+1]
+        self.cc += 1
+        def filter_fun(rowx):
+            row, _ = rowx
+            return row < self.stop
+        coliter = filter(filter_fun,zip(self.Li[start:end],self.Lx[start:end]))
+        return self.cc-1,coliter
+
+def sub_nnz(subiter):
+    assert(type(subiter) is SubBlock)
+    nnz = 0
+    for col,coliter in subiter:
+        nnz += len(coliter)
+    return nnz
+
+def find_optimal_cuts(L,start,stop,depth=0):
+    MINSIZE = 4
+    Lp,Li,Lx,n = L.Lp, L.Li, L.Lx, L.n
+
+    if not (stop > start+1+MINSIZE):
+        return []
+
+    if depth == 2:
+        return []
+
+    # define weigh function based on distance between two nodes
+    def weight(a,b):
+        assert(b>a)
+        w = 1.0**(-(b-a)) 
+        return w
+
+    # create directed, weighted graph
+    def subiter2weighted_graph(subiter,source,sink):
+        edges = []
+        for col,coliter in subiter:
+            for (row,val) in coliter:
+                edge = (row,col,weight(col,row))
+                edges.append(edge)
+        G = nx.DiGraph()
+        G.add_weighted_edges_from(edges, weight='capacity')
+        return G
+
+    # create weighted graph
+    subiter = SubBlock(Lp,Li,Lx,start,stop)
+    source, sink = stop-1, start
+    G = subiter2weighted_graph(subiter,source,sink)
+    # calculate min-cut
+    cut_value, partition = nx.minimum_cut(G, source, sink, flow_func=nx.algorithms.flow.edmonds_karp)
+    print(partition)
+    # extract cuts
+    cuts = set()
+    part0,part1 = list(partition[0]),list(partition[1])
+    part0.sort()
+    part1.sort()
+    last = None
+    for part in [part0,part1]:
+        if part[0] != start:
+            cuts.add(part[0])
+        for i,p in enumerate(part[1:]):
+            if(part[i] +1 != p):
+                cuts.add(p)
+    cuts.add(start)
+    cuts.add(stop)
+    cuts = sorted(list(cuts))
+    subcuts = []
+    for a,b in zip(cuts[0:-1],cuts[1:]):
+        nctmp = find_optimal_cuts(L,a,b,depth=depth+1)
+        subcuts.extend(nctmp)
+    cuts.remove(start)
+    cuts.remove(stop)
+    cuts.extend(subcuts)
+    return cuts
 
 def verify_cuts(cuts,n):
     cuts.sort()
@@ -784,14 +875,6 @@ def interactive_plot_schedule(L,schedule,cuts):
                     patchlist.extend(patches)
                     rect = tile.show_on_plot(ax,number=synch_num)
                     plotobjs.extend(rect)
-                #elif kernel is Kernel.DENSETRIAG:
-                #    plist = data.color_dict(sq_dict,fillin=True)
-                #    for box in plist:
-                #        patchlist.append(ax.add_patch(box))
-                #elif kernel is Kernel.SPARSETRIAG:
-                #    # sparse diag is entirely done by Heart 0
-                #    for (r,c) in data.index:
-                #        sq_dict[r][c].set_color(color_palette[0])
         plt.pause(0.001)
 
 def plot_schedule(L,schedule,cuts):
@@ -867,10 +950,6 @@ def live_cuts(problem,L,wd,uselx=True):
         lines = plot_cuts(problem,ax,L.n,wd)
         # redraw
         plt.pause(2)
-
-
-def simd_blocking(problem,wp):
-    raise NotImplementedError()
 
 
 def row_col_occupation(L):
@@ -1178,45 +1257,59 @@ def main(args):
                 print()
         print()
 
-    if args.level_schedule or args.level_thr is not None or args.auto_level_thr:
-        if args.level_thr is not None:
-            bprint(f"\nLevel schedule only levels 0 to {args.level_thr} as MANUALLY SELECTED.")
-            PL,perm = incomplete_level_schedule(linsys,args.level_thr, intra_level_reorder=args.intra_level_reorder)
-        elif args.auto_level_thr:
-            level_thr = heuristic_level_thr(linsys)
-            bprint(f"\nLevel schedule only levels 0 to {level_thr} by AUTOMATIC HEURISTIC.")
-            PL,perm = incomplete_level_schedule(linsys,level_thr, intra_level_reorder=args.intra_level_reorder)
-        else:
-            bprint("\nLevel schedule and permute L matrix:")
-            PL,perm = level_schedule(linsys)
-            dprint('  perm=\n',perm)
+    # level scheduling
+    level_thr = None
+    perm = None
+    PL = None
+    if args.level_thr is not None:
+        level_thr = args.level_thr
+        bprint(f"\nLevel schedule only levels 0 to {level_thr} as MANUALLY SELECTED.")
+    elif args.auto_level_thr:
+        level_thr = heuristic_level_thr(linsys)
+        bprint(f"\nLevel schedule only levels 0 to {level_thr} by AUTOMATIC HEURISTIC.")
+
+    if level_thr is not None:
+        PL,perm = incomplete_level_schedule(linsys,level_thr, intra_level_reorder=args.intra_level_reorder)
+    elif args.level_schedule:
+        bprint("\nLevel schedule and permute L matrix:")
+        PL,perm = level_schedule(linsys)
+
+    if PL is not None:
         print('Working with permuted L matrix from now on. Setting L to PL.')
         L = PL
 
     # Read Cutfile
-    if not os.path.exists(cutfile) or args.cut:
-        if not os.path.exists(cutfile):
-            print(f'Cut File {cutfile} does not exist. Proposing cuts.')
-        else:
-            print(f'Cut File {cutfile} exists. Overwriting.')
-            cuts = read_cuts(args.test,args.wd)
-            bprint(f'\nOrriginally cutting at: ',end='')
-            print(*cuts)
-        # suggesting cuts:
-        cuts = [0]
-        if args.level_schedule or args.level_thr:
+    # TODO: restructure!
+    cuts = None
+    if args.live_cuts:
+        live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
+    if args.use_cutfile or args.live_cuts:
+        assert(os.path.exists(cutfile))
+        cuts = read_cuts(args.test,args.wd)
+        bprint(f'\nMANUALLY CUT from file at: ',*cuts)
+    else:
+        if args.level_schedule:
+            cuts = [0]
             levels,bins = compute_level(L)
-            numlevels = args.level_thr if args.level_thr is not None else len(bins)
-            for l in range(numlevels):
+            for l in range(len(bins)):
                 cuts.append(cuts[-1] + bins[l])
-        cuts.append(L.n)
-        # printing and dumping cuts
-        bprint(f'\nSuggesting to cut at: ',end='')
-        print(*cuts)
-        fd = open(cutfile,'w')
-        for c in cuts:
-            fd.write(f'{str(c)}\n')
-        fd.close()
+            cuts.append(L.n)
+            bprint(f'\nCutting based on level scheduling at: ',*cuts)
+        else:
+            # Use the naturally occuring cuts based on partial level scheduling
+            cuts = [0]
+            if level_thr is not None:
+                levels,bins = compute_level(L)
+                for l in range(level_thr):
+                    cuts.append(cuts[-1] + bins[l])
+                bprint(f'\nCuts based on partial level scheduling: ',*cuts)
+            # heuristically compute cuts based on recursive graph partitioning
+            tmpcuts = find_optimal_cuts(L,cuts[-1],L.n)
+            bprint(f'\nCuts based on partial level scheduling: ',*tmpcuts)
+            # heuristically compute cuts based on recursive graph partitioning
+            cuts.extend(tmpcuts)
+            cuts.append(L.n)
+            bprint(f'\nCUTTING based on partial level scheduling and HEURISTIC graph partitioning at : ',*cuts)
 
     if args.occupation:
         bprint('\nCalculate row and column occupation:')
@@ -1234,17 +1327,8 @@ def main(args):
                     print()
             print()
 
-    if args.simd_blocking:
-        simd_blocking(linsys)
-
-    if args.live_cuts:
-        live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
-
     if args.schedule or args.codegen:
         if args.parspl:
-            cuts = read_cuts(args.test,args.wd)
-            bprint(f'\nCutting at: ',end='')
-            print(*cuts)
             print("L matrix to cut & schedule:", L)
             tiles = tile_L(L,cuts) # structured tiles
             assign_kernel_to_tile(tiles)
@@ -1325,12 +1409,10 @@ parser.add_argument(
     default='_HPC_3x3_H2',
     help='Testcase to take data from.',
 )
-parser.add_argument('--simd_blocking','-s', action='store_true',
-    help='Explore SIMD')
 parser.add_argument('--live_cuts', '-l' ,action='store_true',
     help='Interactively determine life cuts. Edit file livecuts to define the cuts for candidate X.')
-parser.add_argument('--cut', '-c' , action='store_true',
-    help='Propose cuts to partition matrix into regions.')
+parser.add_argument('--use_cutfile', '-c' , action='store_true',
+    help='Used cuts proposed in cutfile to partition matrix into regions.')
 parser.add_argument('--schedule', '-S' , action='store_true',
     help='Schedule cut appart matrix.')
 parser.add_argument('--interactive_schedule', action='store_true',

@@ -486,7 +486,8 @@ class DiagInv(Tile):
                 if c in sq_dict[r]:
                     sq_dict[r][c].set_color(color)
                 else:
-                    box = plt.Rectangle((c-.5,r-.5), 1, 1, fc=color ,ec='lime',lw=1)
+                    border = -0.2 # fillin rectangles are displayed smaller in size
+                    box = plt.Rectangle((c-.5-border,r-.5-border), 1+2*border, 1+2*border, fc=color ,ec='lime',lw=1)
                     patches.append(box)
         return patches
 
@@ -655,7 +656,7 @@ class Csc:
         Lx = self.Lx
         n = len(Lp) - 1
 
-        def get_plot_rect(x,y,diag=False,color=None):
+        def get_plot_rect(x,y,diag=False,color=None,border=0):
             if color is not None:
                 c = color
             elif diag:
@@ -678,7 +679,6 @@ class Csc:
 
         # Dictionary for holding artists
         sq_dict = {row:{} for row in range(n)} # dictionary containing all squares
-        border = 0
         linewidth = 5e-2
         for col in range(n):
             # get indices:
