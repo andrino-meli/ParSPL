@@ -2,14 +2,15 @@
 #include "parspl.h"
 #include "runtime.h"
 #include "scheduled_data.h"
+#include "types.h"
 
 #if defined __RT_SSSR_ENABLE && !defined SSSR
 #warning SSSRs are available but not utilized!
 #endif
 
 #if defined PARSPL
-double * const bp_avoid_wall_bound_err = bp_tmp;
-double * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
+FLOAT * const bp_avoid_wall_bound_err = bp_tmp;
+FLOAT * const bp_tmp_g = &bp_avoid_wall_bound_err[-N_CCS*FIRST_BP];
 #endif
 
 #if defined PARSPL
@@ -71,7 +72,7 @@ void permute(int core_id) {
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
         uint16_t* perm_start = &Perm[start_perm[core_id]];
-        double* bp_start = &bp[start_perm[core_id]];
+        FLOAT* bp_start = &bp[start_perm[core_id]];
         asm volatile(
             __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
 
@@ -80,7 +81,7 @@ void permute(int core_id) {
 
             __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_WPTR_0)
             "frep.o     %[len], 1, 1, 0      \n"
-            "fmv.d        ft1, ft0             \n"
+            FMV_INS"    ft1, ft0             \n"
             :: [len]"r"(len), [bp]"r"(bp_start), [b]"r"(&b), [perm]"r"(perm_start)
             : "memory", "t0"
         );
@@ -107,7 +108,7 @@ void permuteT(int core_id) {
         __RT_SSSR_BLOCK_BEGIN
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
         uint16_t* perm_start = &Perm[start_perm[core_id]];
-        double* bp_start = &bp[start_perm[core_id]];
+        FLOAT* bp_start = &bp[start_perm[core_id]];
         asm volatile(
             __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
             __RT_SSSR_SCFGWI(%[x], 0,        __RT_SSSR_REG_IDX_BASE)
@@ -118,7 +119,7 @@ void permuteT(int core_id) {
             __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
             "csrr zero, mcycle                   \n"
             "frep.o     %[len], 1, 1, 0      \n"
-            "fmv.d        ft0, ft1             \n"
+            FMV_INS"    ft0, ft1             \n"
             :: [len]"r"(len), [bp]"r"(bp_start), [x]"r"(&x), [perm]"r"(perm_start)
             : "memory", "zero", "a6", "fa1"
         );
@@ -146,8 +147,8 @@ void diag_inv_mult(int core_id) {
     // multiply
     __RT_SSSR_BLOCK_BEGIN
     uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
-    double* bp_start = &bp[start_perm[core_id]];
-    double* dinv_start = &Dinv[start_perm[core_id]];
+    FLOAT* bp_start = &bp[start_perm[core_id]];
+    FLOAT* dinv_start = &Dinv[start_perm[core_id]];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
 
@@ -159,7 +160,7 @@ void diag_inv_mult(int core_id) {
         __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
         "csrr zero, mcycle                   \n"
         "frep.o     %[len], 1, 1, 0      \n"
-        "fmul.d  ft0, ft1, ft2             \n"
+        FMUL_INS"   ft0, ft1, ft2             \n"
         //bp[i] *= Dinv[i];
         :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start)
         : "memory", "zero", "a6", "fa1"
@@ -171,10 +172,10 @@ void diag_inv_mult(int core_id) {
         __RT_SSSR_SCFGWI(%[stride_ex], 31,   __RT_SSSR_REG_STRIDE_0)
         __RT_SSSR_SCFGWI(%[tmp], 1,       __RT_SSSR_REG_WPTR_0)
         "frep.o     %[len], 1, 1, 0      \n"
-        "fmv.d        ft1, %[zero]             \n"
+        FMV_INS"    ft1, %[zero]             \n"
         __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
         :: [len]"r"(LAST_BP-FIRST_BP-1), [tmp]"r"(&bp_tmp[core_id]),
-           [stride]"r"(8), [zero]"f"(0.0), [stride_ex]"r"(8*N_CCS)
+           [stride]"r"(sizeof(FLOAT)), [zero]"f"(0.0), [stride_ex]"r"(sizeof(FLOAT)*N_CCS)
         : "memory"
     );
     __RT_SSSR_BLOCK_END
@@ -187,12 +188,7 @@ void diag_inv_mult(int core_id) {
     for (int i = core_id; i < LINSYS_N; i += N_CCS) {
         bp[i] *= Dinv[i];
     }
-    // clear out bp_tmp
-    // Below for loop also works but potentially produces bank conflicts
-    //for(int i = 0; i < LAST_BP-FIRST_BP; i++) {
-    //    bp_tmp[(LAST_BP-FIRST_BP)*core_id + i] = 0;
-    //}
-    // interleaved acces version is presumably better against bank conflicts
+    // clear out bp_tmp - interleaved acces is presumably better against bank conflicts
     for(int i = core_id; i < N_CCS*(LAST_BP-FIRST_BP); i+=N_CCS) {
         bp_tmp[i] = 0;
     }
@@ -216,21 +212,21 @@ void diaginv_lsolve(Diaginv const * s){
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int row = s->assigned_rows[i];
         // dot product of row and bp
-        double val;
+        FLOAT val;
         asm volatile(
-            "fmv.d ft3, %[zero]             \n"
-            "fmv.d ft4, %[zero]             \n"
-            "fmv.d ft5, %[zero]             \n"
-            "fmv.d ft6, %[zero]             \n"
+            FMV_INS" ft3, %[zero]             \n"
+            FMV_INS" ft4, %[zero]             \n"
+            FMV_INS" ft5, %[zero]             \n"
+            FMV_INS" ft6, %[zero]             \n"
             __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
             // TODO: revert access to avoid TCDM congestion (?)
             __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
             __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
             "frep.o    %[len], 1, 3, 0b1001 \n"
-            "fmadd.d    ft3, ft0, ft1, ft3  \n"
-            "fadd.d     ft5, ft5, ft6       \n"
-            "fadd.d     ft3, ft3, ft4       \n"
-            "fadd.d     %[val], ft3, ft5    \n"
+            FMADD_INS"  ft3, ft0, ft1, ft3  \n"
+            FADD_INS"  ft5, ft5, ft6       \n"
+            FADD_INS"  ft3, ft3, ft4       \n"
+            FADD_INS"  %[val], ft3, ft5    \n"
             : [val]"=f"(val)
             : [len]"r"(row), [bp]"r"(&bp[s->rowa]),
               [mat]"r"(&s->mat[row*s->n]), [zero]"f"(0.0)
@@ -240,21 +236,20 @@ void diaginv_lsolve(Diaginv const * s){
     }
     // update bp from bp_cp
     uint32_t len = s->num_rows-1;
-    double* bp_start = &bp[s->rowa];
-    double* bp_cp_start = &bp_cp[s->rowa];
+    FLOAT* bp_start = &bp[s->rowa];
+    FLOAT* bp_cp_start = &bp_cp[s->rowa];
     asm volatile(
-        __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
-        __RT_SSSR_SCFGWI(%[bp_cp], 1,       __RT_SSSR_REG_IDX_BASE)
-
-        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_WPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[len], 31,         __RT_SSSR_REG_BOUND_0)
+        __RT_SSSR_SCFGWI(%[bp], 0,           __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[bp_cp], 1,        __RT_SSSR_REG_IDX_BASE)
+        __RT_SSSR_SCFGWI(%[row], 0,          __RT_SSSR_REG_WPTR_INDIR)
         "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
         "mv      zero, a6                    \n" //_rt_fpu_fence_full();
         "csrr    zero,0x7c2                  \n" // __rt_barrier();
-        __RT_SSSR_SCFGWI(%[row], 1,    __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[row], 1,          __RT_SSSR_REG_RPTR_INDIR)
         "csrr zero, mcycle                   \n"
-        "frep.o     %[len], 1, 1, 0      \n"
-        "fmv.d  ft0, ft1                 \n"
+        "frep.o     %[len], 1, 1, 0          \n"
+        FMV_INS"   ft0, ft1                  \n"
         //bp[i] *= Dinv[i];
         :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start),
            [row]"r"(s->assigned_rows)
@@ -271,7 +266,7 @@ void diaginv_lsolve(Diaginv const * s){
         unsigned int row = s->assigned_rows[i];
         //printf("diaginv_lsolve: processing row %d, row+rowa %d\n",row,row+s->rowa);
         // dot product of row and bp
-        double val = 0;
+        FLOAT val = 0;
         for(unsigned col = 0; col <= row; col++){
             // TODO: currently all harts have the same access pattern to bp
             //       have to reverse to avoid tcdm access congestion
@@ -300,61 +295,31 @@ void diaginv_ltsolve(Diaginv const * s){
     // iterate through the rows
     asm volatile(
         __RT_SSSR_SCFGWI(%[stride_ex], 1,   __RT_SSSR_REG_STRIDE_0)
-        :: [stride_ex]"r"(s->n*8) : "memory"
+        :: [stride_ex]"r"(s->n*sizeof(FLOAT)) : "memory"
     );
     __RT_SSSR_BLOCK_BEGIN
     __RT_SEPERATOR 
     for(unsigned int i = 0; i < s->num_rows; i++){
         unsigned int col = s->n - s->assigned_rows[i] - 1; // row is saved in mat as col
                                         // -1 as we process 0..n-1
-        double val;
-        double const * const bparg = &bp[s->rowa + col];
-        double const * const matarg = &s->mat[col*s->n + col];
-        //if ( i == 0 ){ // for i=0 also synchronize!
-        //    asm volatile(
-        //        // TODO: revert access to avoid TCDM congestion
-        //        "fmv.d ft3, %[zero]             \n"
-        //        "fmv.d ft4, %[zero]             \n"
-        //        "fmv.d ft5, %[zero]             \n"
-        //        "fmv.d ft6, %[zero]             \n"
-        //        __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
-        //        // the reason we take the i==0 out of the loop is to have the
-        //        // synchronization fence as late as possible.
-        //        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
-        //        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
-        //        "csrr    zero,0x7c2                  \n" // __rt_barrier();
-        //        __RT_SSSR_ENABLE
-        //        __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
-        //        __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
-        //        "csrr zero, mcycle                   \n"
-        //        "frep.o    %[len], 1, 3, 0b1001 \n"
-        //        "fmadd.d    ft3, ft0, ft1, ft3  \n"
-        //        // val += s->mat[row * s->n + col] * bp[s->rowa + row];
-        //        "fadd.d     ft5, ft5, ft6       \n"
-        //        "fadd.d     ft3, ft3, ft4       \n"
-        //        "fadd.d     %[val], ft3, ft5    \n"
-        //        : [val]"=f"(val)
-        //        : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
-        //          [mat]"r"(matarg), [zero]"f"(0.0)
-        //        : "memory", "ft3","ft4","ft5","ft6", "a6"
-        //    );
-        //    bp_cp[s->rowa + col] = val;
-        //} else {
+        FLOAT val;
+        FLOAT const * const bparg = &bp[s->rowa + col];
+        FLOAT const * const matarg = &s->mat[col*s->n + col];
             asm volatile(
                 // TODO: revert access to avoid TCDM congestion
-                "fmv.d ft3, %[zero]             \n"
-                "fmv.d ft4, %[zero]             \n"
-                "fmv.d ft5, %[zero]             \n"
-                "fmv.d ft6, %[zero]             \n"
+                FMV_INS" ft3, %[zero]             \n"
+                FMV_INS" ft4, %[zero]             \n"
+                FMV_INS" ft5, %[zero]             \n"
+                FMV_INS" ft6, %[zero]             \n"
                 __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
                 __RT_SSSR_SCFGWI(%[bp] ,   0,     __RT_SSSR_REG_RPTR_0)
                 __RT_SSSR_SCFGWI(%[mat],   1,     __RT_SSSR_REG_RPTR_0)
-                "frep.o    %[len], 1, 3, 0b1001 \n"
-                "fmadd.d    ft3, ft0, ft1, ft3  \n"
+                "frep.o    %[len], 1, 3, 0b1001  \n"
+                FMADD_INS" ft3, ft0, ft1, ft3    \n"
                 // val += s->mat[row * s->n + col] * bp[s->rowa + row];
-                "fadd.d     ft5, ft5, ft6       \n"
-                "fadd.d     ft3, ft3, ft4       \n"
-                "fadd.d     %[val], ft3, ft5    \n"
+                FADD_INS"    ft5, ft5, ft6       \n"
+                FADD_INS"    ft3, ft3, ft4       \n"
+                FADD_INS"    %[val], ft3, ft5    \n"
                 : [val]"=f"(val)
                 : [len]"r"(s->assigned_rows[i]), [bp]"r"(bparg),
                   [mat]"r"(matarg), [zero]"f"(0.0)
@@ -365,12 +330,12 @@ void diaginv_ltsolve(Diaginv const * s){
     }
     asm volatile(
         __RT_SSSR_SCFGWI(%[stride], 1,   __RT_SSSR_REG_STRIDE_0)
-        :: [stride]"r"(8) : "memory"
+        :: [stride]"r"(sizeof(FLOAT)) : "memory"
     );
     // update bp from bp_cp
     uint32_t len = s->num_rows-1;
-    double* bp_start = &bp[s->rowa-1];
-    double* bp_cp_start = &bp_cp[s->rowa-1];
+    FLOAT* bp_start = &bp[s->rowa-1];
+    FLOAT* bp_cp_start = &bp_cp[s->rowa-1];
     asm volatile(
         __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
         __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_IDX_BASE)
@@ -383,7 +348,7 @@ void diaginv_ltsolve(Diaginv const * s){
         __RT_SSSR_SCFGWI(%[row], 1,      __RT_SSSR_REG_RPTR_INDIR)
         "csrr zero, mcycle                   \n"
         "frep.o     %[len], 1, 1, 0          \n"
-        "fmv.d  ft0, ft1                     \n"
+        FMV_INS"   ft0, ft1                  \n"
         //bp[i] *= Dinv[i];
         :: [len]"r"(len), [bp]"r"(bp_start), [bp_cp]"r"(bp_cp_start), [row]"r"(s->assigned_rows)
         : "memory", "zero", "a6", "fa1"
@@ -403,7 +368,7 @@ void diaginv_ltsolve(Diaginv const * s){
                                         // -1 as we process 0..n-1
         //printf("diaginv_ltsolve: processing col %d, col+rowa %d\n",col,col+rowa);
         // dot product of col and bp
-        double val = 0;
+        FLOAT val = 0;
         for(unsigned int row = col; row < s->n; row++){
             val += s->mat[row * s->n + col] * bp[s->rowa + row];
             //printf("col %d row %d   s->mat[%d] bp[%d]\t",col, row, row*s->n+col,s->rowa + row);
@@ -455,25 +420,25 @@ void collist_lsolve(Collist const * s, int core_id) {
         for( ;(i+1) < s->num_cols; ){
             unsigned int col = assigned_cols[i];
             unsigned int col2 = assigned_cols[i+1];
-            double val = bp[col]; 
+            FLOAT val = bp[col]; 
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
              __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
              __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
-            "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+            "frep.o    %[ilen], 1, 0, 0                \n"
+            FNMSUB_INS" ft0, %[val], ft2, ft1          \n"
             : [val]"+f"(val)
             : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
             : "memory");
             pos += len_cols[i];
             i++;
-            double val2 = bp[col2]; // TODO: load at beginning of 2x unroll
+            FLOAT val2 = bp[col2]; // TODO: load at beginning of 2x unroll
             asm volatile(
              __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
              __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_WPTR_INDIR)
              __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_RPTR_INDIR)
-            "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft1, %[val], ft2, ft0          \n"
+            "frep.o    %[ilen], 1, 0, 0                \n"
+            FNMSUB_INS" ft1, %[val], ft2, ft0          \n"
             : [val]"+f"(val2)
             : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
             : "memory");
@@ -482,13 +447,13 @@ void collist_lsolve(Collist const * s, int core_id) {
         }
         if(i < s->num_cols){
             unsigned int col = assigned_cols[i];
-            double val = bp[col]; 
+            FLOAT val = bp[col]; 
             asm volatile(
-             __RT_SSSR_SCFGWI(%[ilen], 31,     __RT_SSSR_REG_BOUND_0)
+             __RT_SSSR_SCFGWI(%[ilen], 31,    __RT_SSSR_REG_BOUND_0)
              __RT_SSSR_SCFGWI(%[ri],    0,    __RT_SSSR_REG_WPTR_INDIR)
              __RT_SSSR_SCFGWI(%[ri],    1,    __RT_SSSR_REG_RPTR_INDIR)
             "frep.o    %[ilen], 1, 0, 0       \n"
-            "fnmsub.d  ft0, %[val], ft2, ft1          \n"
+            FNMSUB_INS" ft0, %[val], ft2, ft1 \n"
             : [val]"+f"(val)
             : [ilen]"r"(len_cols[i]-1), [ri]"r"(&ri[pos])
             : "memory");
@@ -516,24 +481,24 @@ void collist_lsolve(Collist const * s, int core_id) {
         : "memory", "zero", "a6", "fa1"
     );
     while( i+1 < s-> reductiona + s->reductionlen ){
-        double val1;
-        double val2;
+        FLOAT val1;
+        FLOAT val2;
         asm volatile(
             __RT_SSSR_SCFGWI(%[bp0],  0,    __RT_SSSR_REG_RPTR_0)
             __RT_SSSR_SCFGWI(%[bp1],  1,    __RT_SSSR_REG_RPTR_0)
-            "fadd.d  %[val1], ft2, ft0          \n"
-            "fadd.d  ft3, %[zero], ft0          \n"
-            "fadd.d  %[val2], ft2, ft1          \n"
-            "fadd.d  ft4, %[zero], ft1          \n"
+            FADD_INS"  %[val1], ft2, ft0          \n"
+            FADD_INS"  ft3, %[zero], ft0          \n"
+            FADD_INS"  %[val2], ft2, ft1          \n"
+            FADD_INS"  ft4, %[zero], ft1          \n"
 
-            "frep.o  %[len],       4, 0, 0      \n"
-            "fadd.d  %[val1], %[val1], ft0      \n"
-            "fadd.d  ft3, ft3, ft0              \n"
-            "fadd.d  %[val2], %[val2], ft1      \n"
-            "fadd.d  ft4, ft4, ft1              \n"
+            "frep.o  %[len],       4, 0, 0        \n"
+            FADD_INS"  %[val1], %[val1], ft0      \n"
+            FADD_INS"  ft3, ft3, ft0              \n"
+            FADD_INS"  %[val2], %[val2], ft1      \n"
+            FADD_INS"  ft4, ft4, ft1              \n"
 
-            "fadd.d  %[val1], %[val1], ft3      \n"
-            "fadd.d  %[val2], %[val2], ft4      \n"
+            FADD_INS" %[val1], %[val1], ft3       \n"
+            FADD_INS" %[val2], %[val2], ft4       \n"
             :  [val1]"=f"(val1), [val2]"=f"(val2)
             :  [len]"r"(N_CCS/2-2), [bp0]"r"(&bp_tmp_g[N_CCS*i]), [bp1]"r"(&bp_tmp_g[N_CCS*(i+1)]),
                [zero]"f"(0.0)
@@ -547,20 +512,20 @@ void collist_lsolve(Collist const * s, int core_id) {
         #if N_CCS!=8
         #warning N_CCS must be 8 for the here optimized binary reduction tree
         #endif
-        double val;
+        FLOAT val;
         asm volatile(
             __RT_SSSR_SCFGWI(%[len], 31,    __RT_SSSR_REG_BOUND_0 )
             __RT_SSSR_SCFGWI(%[bp0],  0,    __RT_SSSR_REG_RPTR_0  )
             __RT_SSSR_SCFGWI(%[bp1],  1,    __RT_SSSR_REG_RPTR_0  )
-            "fadd.d  ft3,     ft0, ft1      \n"
-            "fadd.d  ft4,     ft0, ft1      \n"
-            "fadd.d  ft5,     ft0, ft1      \n"
-            "fadd.d  %[val],  ft0, ft1      \n"
-            "fadd.d  ft3,     ft3, ft2      \n"
+            FADD_INS"  ft3,     ft0, ft1      \n"
+            FADD_INS"  ft4,     ft0, ft1      \n"
+            FADD_INS"  ft5,     ft0, ft1      \n"
+            FADD_INS"  %[val],  ft0, ft1      \n"
+            FADD_INS"  ft3,     ft3, ft2      \n"
 
-            "fadd.d  ft4,     ft4, ft5      \n"
-            "fadd.d  %[val], %[val], ft3    \n"
-            "fadd.d  %[val], %[val], ft4    \n"
+            FADD_INS"  ft4,     ft4, ft5      \n"
+            FADD_INS"  %[val], %[val], ft3    \n"
+            FADD_INS"  %[val], %[val], ft4    \n"
             :  [val]"=f"(val)
             :  [len]"r"(N_CCS/2-1), [zero]"f"(0.0),
                [bp0]"r"(&bp_tmp_g[N_CCS*i]), [bp1]"r"(&bp_tmp_g[N_CCS*i+4])
@@ -580,7 +545,7 @@ void collist_lsolve(Collist const * s, int core_id) {
     for(unsigned int i = 0; i < s->num_cols; i++){
         unsigned int col = s->assigned_cols[i];
         // access val to muliply column with
-        double val = bp[col];
+        FLOAT val = bp[col];
         // work through data in a column
         for(unsigned int j = 0; j < s->len_cols[i]; j++){
             // Note: N_CCS interleaved data access is expensive: consider placing
@@ -622,10 +587,10 @@ void collist_ltsolve(Collist const * s) {
         : "memory", "zero", "a6", "fa1"
     );
     // work through rows
-    double register val asm("ft3");
-    double register val4 asm("ft4");
-    double register val5 asm("ft5");
-    double register val6 asm("ft6");
+    FLOAT register val asm("ft3");
+    FLOAT register val4 asm("ft4");
+    FLOAT register val5 asm("ft5");
+    FLOAT register val6 asm("ft6");
     for(unsigned int i = 0; i < s->num_cols; i++){
         unsigned int row = s->assigned_cols[i];
         // work through data in a row: read val
@@ -636,10 +601,10 @@ void collist_ltsolve(Collist const * s) {
         uint16_t ilen = s->len_cols[i]-1;
         asm volatile(
         "frep.o    %[ilen], 1, 3, 0b1001       \n"
-        "fnmsub.d  ft3, ft1, ft2, ft3          \n"
-        "fadd.d   ft3, ft3, ft4                \n"
-        "fadd.d   ft5, ft5, ft6                \n"
-        "fadd.d   ft3, ft5, ft3                \n"
+        FNMSUB_INS" ft3, ft1, ft2, ft3          \n"
+        FADD_INS"  ft3, ft3, ft4               \n"
+        FADD_INS"  ft5, ft5, ft6               \n"
+        FADD_INS"  ft3, ft5, ft3               \n"
         : [val]"+f"(val), [val4]"+f"(val4), [val5]"+f"(val5), [val6]"+f"(val6)
         : [ilen]"r"(ilen)
         : "memory");
@@ -663,7 +628,7 @@ void collist_ltsolve(Collist const * s) {
     for(unsigned int i = 0; i < s->num_cols; i++){
         unsigned int row = s->assigned_cols[i];
         // work through data in a row: read val
-        double val = bp[row];
+        FLOAT val = bp[row];
         // update val
         for(unsigned int j = 0; j < s->len_cols[i]; j++){
             val -= bp[s->ri[pos]]*s->rx[pos];
@@ -681,7 +646,7 @@ void collist_ltsolve(Collist const * s) {
 void mapping_lsolve(Mapping const * s, int core_id) {
     asm volatile("_mapping_lsolve: \n":::);
     uint32_t len = s->assigned_data -1;
-    double* bp_cph = &bp_cp[start_perm[core_id]];
+    FLOAT* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
         __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
@@ -693,9 +658,9 @@ void mapping_lsolve(Mapping const * s, int core_id) {
         __RT_SSSR_SCFGWI(%[col], 1,       __RT_SSSR_REG_RPTR_INDIR)
         __RT_SSSR_SCFGWI(%[bp_cp], 0,     __RT_SSSR_REG_WPTR_0)
         __RT_SSSR_SCFGWI(%[val], 2,       __RT_SSSR_REG_RPTR_0)
-        "csrr zero, mcycle                   \n"
+        "csrr zero, mcycle                \n"
         "frep.o     %[len], 1, 1, 0       \n"
-        "fmul.d ft0,ft1,ft2               \n"
+        FMUL_INS"  ft0,ft1,ft2            \n"
         // bp[row] = bp[row] - bp_cph[..]
         // avoid fpu barrier by changing ft0 write stream to read stream
         __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_RPTR_INDIR)
@@ -704,7 +669,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
         "mv      zero, a6                 \n" //_rt_fpu_fence_full();
         __RT_SSSR_SCFGWI(%[bp_cp], 2,   __RT_SSSR_REG_RPTR_0)
         "frep.o     %[len], 1, 1, 0     \n"
-        "fsub.d ft1,ft0,ft2             \n"
+        FSUB_INS" ft1,ft0,ft2             \n"
         :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ci),
            [val]"r"(s->data), [row]"r"(s->ri)
         : "memory", "zero", "a6", "fa1"
@@ -718,7 +683,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
     for(unsigned int i = 0; i < s->assigned_data; i++){
         uint16_t row = s->ri[i];
         uint16_t col = s->ci[i];
-        double val = s->data[i];
+        FLOAT val = s->data[i];
         //bp[row] -= bp[col]*bp[col+1];
         bp[row] -= bp[col]*val;
     }
@@ -730,7 +695,7 @@ void mapping_lsolve(Mapping const * s, int core_id) {
 void mapping_ltsolve(Mapping const * s, int core_id) {
     asm volatile("_mapping_ltsolve: \n":::);
     uint32_t len = s->assigned_data -1;
-    double* bp_cph = &bp_cp[start_perm[core_id]];
+    FLOAT* bp_cph = &bp_cp[start_perm[core_id]];
     __RT_SSSR_BLOCK_BEGIN
     asm volatile(
         __RT_SSSR_SCFGWI(%[len],  31,     __RT_SSSR_REG_BOUND_0)
@@ -742,18 +707,18 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
         __RT_SSSR_SCFGWI(%[col], 1,       __RT_SSSR_REG_RPTR_INDIR)
         __RT_SSSR_SCFGWI(%[bp_cp], 0,     __RT_SSSR_REG_WPTR_0)
         __RT_SSSR_SCFGWI(%[val], 2,       __RT_SSSR_REG_RPTR_0)
-        "csrr zero, mcycle                   \n"
+        "csrr zero, mcycle                \n"
         "frep.o     %[len], 1, 1, 0       \n"
-        "fmul.d ft0,ft1,ft2               \n"
+        FMUL_INS"  ft0,ft1,ft2            \n"
         // bp[row] = bp[row] - bp_cph[..]
         // avoid fpu barrier by changing ft0 write stream to read stream
-        __RT_SSSR_SCFGWI(%[row], 0,     __RT_SSSR_REG_RPTR_INDIR)
-        __RT_SSSR_SCFGWI(%[row], 1,     __RT_SSSR_REG_WPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[row], 0,       __RT_SSSR_REG_RPTR_INDIR)
+        __RT_SSSR_SCFGWI(%[row], 1,       __RT_SSSR_REG_WPTR_INDIR)
         "fmv.x.w a6, fa1                  \n" //_rt_fpu_fence_full();
         "mv      zero, a6                 \n" //_rt_fpu_fence_full();
-        __RT_SSSR_SCFGWI(%[bp_cp], 2,   __RT_SSSR_REG_RPTR_0)
-        "frep.o     %[len], 1, 1, 0     \n"
-        "fsub.d ft1,ft0,ft2             \n"
+        __RT_SSSR_SCFGWI(%[bp_cp], 2,     __RT_SSSR_REG_RPTR_0)
+        "frep.o      %[len], 1, 1, 0      \n"
+        FSUB_INS" ft1,ft0,ft2             \n"
         :: [len]"r"(len), [bp]"r"(bp), [bp_cp]"r"(bp_cph), [col]"r"(s->ri),
            [val]"r"(s->data), [row]"r"(s->ci)
         : "memory", "zero", "a6", "fa1"
@@ -767,7 +732,7 @@ void mapping_ltsolve(Mapping const * s, int core_id) {
     for(unsigned int i = 0; i < s->assigned_data; i++){
         uint16_t col = s->ri[i];
         uint16_t row = s->ci[i];
-        double val = s->data[i];
+        FLOAT val = s->data[i];
         bp[row] -= bp[col]*val;
     }
 }
@@ -780,7 +745,7 @@ void solve_csc() {
     // WARNING: implemented to not use permutations
     // QDLDL_Lsolve: Solves (L+I)x = b
     for(unsigned int i = 0; i < LINSYS_N-1; i++){
-        double val = b[i];
+        FLOAT val = b[i];
         for(unsigned int j = Lp[i]; j < Lp[i+1]; j++){
             b[Li[j]] -= Lx[j]*val;
         }
@@ -796,7 +761,7 @@ void solve_csc() {
     // QDLDL_Ltsolve: Solves (L+I)'x = b
     x[LINSYS_N-1] = b[LINSYS_N-1]; // copy over result
     for(int i = LINSYS_N - 2; i>=0; i--){
-        double val = b[i];
+        FLOAT val = b[i];
         for(unsigned int j = Lp[i]; j < Lp[i+1]; j++){
             val -= Lx[j]*x[Li[j]];
         }
@@ -806,7 +771,7 @@ void solve_csc() {
 #endif
 
 #ifdef PSOLVE_CSC
-double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
+FLOAT FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
 // parallel linear system solution using CSC matrix format
 void psolve_csc(int core_id) {
@@ -818,7 +783,7 @@ void psolve_csc(int core_id) {
         }
     } else {
         for(int i = 0; i < LINSYS_N-1; i++){
-            double val = b[i];
+            FLOAT val = b[i];
             for(unsigned int j = Lp[i] + core_id; j < Lp[i+1]; j+=N_CCS){
                 b[Li[j]] -= Lx[j]*val;
             }
@@ -854,7 +819,7 @@ void psolve_csc(int core_id) {
         }
     } else {
         for(int i = LINSYS_N - 2; i>=0; i--){
-            double val = 0;
+            FLOAT val = 0;
             for(unsigned int j = Lp[i]+core_id; j < Lp[i+1]; j+=N_CCS) {
                 val -= Lx[j]*x[Li[j]];
             }
@@ -863,7 +828,7 @@ void psolve_csc(int core_id) {
             __rt_barrier();
             // Fan in updates to x[i], least bussy core does reg.
             if(core_id == N_CCS-1) {
-                double accu = 0;
+                FLOAT accu = 0;
                 for(int i = 0; i < N_CCS; i++){
                     accu += FanInVal[i];
                 }
@@ -877,7 +842,7 @@ void psolve_csc(int core_id) {
 #endif
 
 #if defined SSSR_PSOLVE_CSC
-double FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
+FLOAT FanInVal[N_CCS] __attribute__((section(".l1"), aligned(8)));
 
 void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
   asm volatile("_sssr_psolve_cscBS: \n":::);
@@ -897,7 +862,7 @@ void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
         __RT_SSSR_SCFGWI(%[stride], 2, __RT_SSSR_REG_STRIDE_0)
         __RT_SSSR_SCFGWI(%[lxbase], 2, __RT_SSSR_REG_RPTR_0)
         :: [streamlen]"r"(LpLenSum[core_id]-1), [b]"r"(b),
-        [icfg]"r"(__RT_SSSR_IDXSIZE_U16), [stride]"r"(-sizeof(double)),
+        [icfg]"r"(__RT_SSSR_IDXSIZE_U16), [stride]"r"(-sizeof(FLOAT)),
         [lxbase]"r"(&LxNew[top])
         : "memory"
         );
@@ -910,17 +875,17 @@ void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
         __RT_SSSR_SCFGWI(%[len], 1, __RT_SSSR_REG_BOUND_0) :: [len]"r"(len) :
         );
         lentop--;
-        double* valptr = &b[LINSYS_N-2];
+        FLOAT* valptr = &b[LINSYS_N-2];
 #pragma nounroll
         for(; valptr >= b;){
-            register double val = 0;
+            register FLOAT val = 0;
             if (len != -1) {
                 asm volatile(
                 "csrr    zero,0x7c2                  \n" // synchronize before loading b[i]s
                 __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
                 "frep.o   %[len], 1, 1, 0            \n"
-                "fmadd.d  %[val], ft1, ft2,%[val]    \n"
-                "fsd      %[val], 0(%[fanin])        \n"
+                FMADD_INS"%[val], ft1, ft2,%[val]    \n"
+                FSD_INS"  %[val], 0(%[fanin])        \n"
                 "addi    a5, %[len], 1               \n"
                 "lbu     %[len], 0(%[lentop])        \n"
                 "addi    %[lentop], %[lentop], -1    \n"
@@ -956,26 +921,26 @@ void SSSR_PQDLDL_Ltsolve(uint32_t core_id){
                 //}
                 //b[i] -= accu;
                 asm volatile(
-                "fld	ft4,0(%[fanin])    \n"
-                "fld	ft5,8(%[fanin])    \n"
-                "fld	ft6,16(%[fanin])   \n"
-                "fld	ft7,24(%[fanin])   \n"
-                "fadd.d	ft4,ft4,ft5        \n" // 0+1
-                "fld	ft8,32(%[fanin])   \n"
-                "fadd.d	ft5,ft6,ft7        \n" // 2+3
-                "fld	ft9,40(%[fanin])   \n"
-                "fld	ft10,48(%[fanin])  \n"
-                "fadd.d	ft6,ft8,ft9        \n" // 4+5
-                "fadd.d ft4,ft4,ft5        \n" // 0+1 + 2+3
-                "fld	ft11,0(%[bvec])      \n"
-                "fadd.d	ft10,ft10,%[val]   \n" // 6+7
-                "fadd.d ft6,ft6,ft4        \n" // 0+1 + 2+3 + 4+5
-                "fsub.d	ft11,ft11,ft10      \n" // bvec[i] - (6+7)
-                "fsub.d	ft11,ft11,ft6      \n" // bvec[i] - all
-                "fsd	ft11,0(%[bvec])      \n"
+                FLW_INS"    ft4,0(%[fanin])    \n"
+                FLW_INS"    ft5,8(%[fanin])    \n"
+                FLW_INS"    ft6,16(%[fanin])   \n"
+                FLW_INS"    ft7,24(%[fanin])   \n"
+                FADD_INS"	ft4,ft4,ft5        \n" // 0+1
+                FLW_INS"    ft8,32(%[fanin])   \n"
+                FADD_INS"  	ft5,ft6,ft7        \n" // 2+3
+                FLW_INS"    ft9,40(%[fanin])   \n"
+                FLW_INS"    ft10,48(%[fanin])  \n"
+                FADD_INS"   ft6,ft8,ft9        \n" // 4+5
+                FADD_INS"   ft4,ft4,ft5        \n" // 0+1 + 2+3
+                FLW_INS"	ft11,0(%[bvec])    \n"
+                FADD_INS"   ft10,ft10,%[val]   \n" // 6+7
+                FADD_INS"   ft6,ft6,ft4        \n" // 0+1 + 2+3 + 4+5
+                FSUB_INS"   ft11,ft11,ft10     \n" // bvec[i] - (6+7)
+                FSUB_INS"   ft11,ft11,ft6      \n" // bvec[i] - all
+                FSW_INS"    ft11,0(%[bvec])    \n"
                 "addi   %[bvec],%[bvec],%[bytes]     \n"
                 : [bvec]"+r"(valptr)
-                : [fanin]"r"(FanInVal), [val]"f"(val), [bytes]"i"(-sizeof(double))
+                : [fanin]"r"(FanInVal), [val]"f"(val), [bytes]"i"(-sizeof(FLOAT))
                 : "memory", "ft4", "ft5", "ft6", "ft7", "ft8", "ft9", "ft10", "ft11"
                 );
                 __rt_fpu_fence_full();
@@ -1007,10 +972,10 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
         __RT_SSSR_SCFGWI(%[stride], 2, __RT_SSSR_REG_STRIDE_0)
         __RT_SSSR_SCFGWI(%[lxbase], 2, __RT_SSSR_REG_RPTR_0)
         :: [streamlen]"r"(LpLenSum[core_id]-1), [b]"r"(b), [icfg]"r"(__RT_SSSR_IDXSIZE_U16),
-           [stride]"r"(sizeof(double)), [lxbase]"r"(&LxNew[base]), [libase] "r"(&LiNew[base])
+           [stride]"r"(sizeof(FLOAT)), [lxbase]"r"(&LxNew[base]), [libase] "r"(&LiNew[base])
         : "memory"
     );
-    double* valptr = b;
+    FLOAT* valptr = b;
     int write_stream = 0;
     uint8_t* lenarr = &LpLen[(LINSYS_N-1)*core_id];
     uint8_t len = *lenarr;
@@ -1026,17 +991,17 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
                 "mv zero, a6                     \n" //_rt_fpu_fence_full();
                 "lbu         a5,1(%[lenarr])     \n" // has a high load latency
                 "csrr    zero,0x7c2              \n" // __rt_barrier();
-                "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                FLW_INS" ft3,0(%[valptr])        \n" // load b[i] = *valptr
                 __RT_SSSR_SCFGWI(%[libase], 1, __RT_SSSR_REG_RPTR_INDIR)
                 "frep.o     %[len], 1, 1, 0      \n"
-                "fnmsub.d   ft0, ft2, ft3, ft1   \n"
+                FNMSUB_INS" ft0, ft2, ft3, ft1   \n"
                 "addi %[base], %[base], 1        \n" // because len is actually len-1
                 "addi       %[valptr],%[valptr], %[bytes]        \n" // valptr++
                 "add %[base], %[base], %[len]    \n"
                 "addi       %[lenarr], %[lenarr], 1     \n"
                 "mv %[len], a5                   \n" // store intermediate load to len
                 : [valptr]"+r"(valptr), [base]"+r"(base), [lenarr]"+r"(lenarr), [len]"+r"(len)
-                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(double))
+                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(FLOAT))
                 : "memory", "ft3","a6", "a5"
             );
             write_stream = 1;
@@ -1050,17 +1015,17 @@ void SSSR_PQDLDL_Lsolve(uint32_t core_id){
                 "mv zero, a6                     \n" //_rt_fpu_fence_full();
                 "lbu         a5,1(%[lenarr])     \n" // has a high load latency
                 "csrr    zero,0x7c2              \n" // __rt_barrier();
-                "fld     ft3,0(%[valptr])        \n" // load b[i] = *valptr
+                FLW_INS" ft3,0(%[valptr])        \n" // load b[i] = *valptr
                 __RT_SSSR_SCFGWI(%[libase], 0, __RT_SSSR_REG_RPTR_INDIR)
                 "frep.o     %[len], 1, 1, 0      \n"
-                "fnmsub.d   ft1, ft2, ft3, ft0   \n"
+                FNMSUB_INS" ft1, ft2, ft3, ft0   \n"
                 "addi %[base], %[base], 1        \n" // because len is actually len-1
                 "addi       %[valptr],%[valptr], %[bytes]        \n" // valptr++
                 "add %[base], %[base], %[len]    \n"
                 "addi       %[lenarr], %[lenarr], 1     \n"
                 "mv %[len], a5                   \n" // store intermediate load to len
                 : [valptr]"+r"(valptr), [base]"+r"(base), [lenarr]"+r"(lenarr), [len]"+r"(len)
-                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(double))
+                : [libase] "r"(&LiNew[base]), [bytes]"i"(sizeof(FLOAT))
                 : "memory", "ft3","a6", "a5"
             );
             write_stream = 0;
@@ -1094,20 +1059,19 @@ void sssr_psolve_csc(int core_id) {
         asm volatile("_diag_inv_mult: \n":::);
         // multiply
         uint32_t len = len_perm[core_id]; //len is 0 for length of 1: so store -1 explicitly
-        double* bp_start = &b[start_perm[core_id]];
-        double* dinv_start = &Dinv[start_perm[core_id]];
+        FLOAT* bp_start = &b[start_perm[core_id]];
+        FLOAT* dinv_start = &Dinv[start_perm[core_id]];
         asm volatile(
-            __RT_SSSR_SCFGWI(%[len], 31,     __RT_SSSR_REG_BOUND_0)
-
-            __RT_SSSR_SCFGWI(%[bp], 0,       __RT_SSSR_REG_WPTR_0)
+            __RT_SSSR_SCFGWI(%[len], 31,         __RT_SSSR_REG_BOUND_0)
+            __RT_SSSR_SCFGWI(%[bp], 0,           __RT_SSSR_REG_WPTR_0)
             "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
             "mv      zero, a6                    \n" //_rt_fpu_fence_full();
             "csrr    zero,0x7c2                  \n" // __rt_barrier();
-            __RT_SSSR_SCFGWI(%[bp], 1,       __RT_SSSR_REG_RPTR_0)
-            __RT_SSSR_SCFGWI(%[dinv], 2,     __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[bp], 1,           __RT_SSSR_REG_RPTR_0)
+            __RT_SSSR_SCFGWI(%[dinv], 2,         __RT_SSSR_REG_RPTR_0)
             "csrr zero, mcycle                   \n"
-            "frep.o     %[len], 1, 1, 0      \n"
-            "fmul.d  ft0, ft1, ft2             \n"
+            "frep.o     %[len], 1, 1, 0          \n"
+            FMUL_INS"   ft0, ft1, ft2            \n"
             //bp[i] *= Dinv[i];
             :: [len]"r"(len), [bp]"r"(bp_start), [dinv]"r"(dinv_start)
             : "memory", "zero", "a6", "fa1"

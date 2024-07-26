@@ -20,74 +20,15 @@
 #include <stdint.h>
 
 #include "runtime.h"   // for runtime barrier
+#include "types.h"
 #include "parspl.h"   // for lsolve, ltsolve, solve
 #include "workspace.h" // for access to x, GOLD, GOLD_INV
-#include "print_float.h"
-
-#define TOL (1e2) // require the error to be less than 1%
+#include "verify.h"
 
 #ifdef __RT_SSSR_ENABLE
 #define SSSR
 #endif
 
-int verify() {
-    asm volatile("_verify: \n":::);
-    double maxerr = 0;
-    double maxrelerr = 0;
-
-    for(int j = 0; j < LINSYS_N; j++){
-        // Access x in permutated order to be alligns with the plots.
-        #ifdef PERMUTATE
-        int i = Perm[j];
-        #else
-        int i = j;
-        #endif
-        // absolute error
-        double err = (double)x[i] - XGOLD[i];
-        double abserr = ( err >= 0 ) ? err : -err;
-        if (maxerr < abserr) maxerr = abserr;
-        // relative error
-        double relerr = err*XGOLD_INV[i];
-        double absrel = ( relerr >= 0 ) ? relerr : -relerr;
-        #ifdef VERBOSE
-        printf("prow %d:\t\tgold %.3e, x %.3e,\terr %.3e,\tabsrel %.3f%%\trow %d\n",
-                j, XGOLD[i], x[i], err, absrel*100, i);
-        #elif defined PRINTF
-        printf("prow %d:\t\tgold ",j);
-        printFloat(XGOLD[i]);
-        printf(", x  ");
-        printFloat(x[i]);
-        printf(", err  ");
-        printFloat(err);
-        printf(", abserr  ");
-        printFloat(absrel*100);
-        printf("%%\trow %d\n",i);
-        #endif
-        if (maxrelerr < absrel) {
-            maxrelerr = absrel;
-            #ifdef VERBOSE
-            printf("Updating maxrelerr on prow %d\n",i);
-            #endif
-        }
-    }
-    #ifdef PRINTF
-        #ifdef LSOLVE
-        printf("\nVERIFICATION of lsolve:\n");
-        #endif
-        #ifdef LTSOLVE
-        printf("\nVERIFICATION of ltsolve:\n");
-        #endif
-        #ifdef SOLVE
-        printf("\nVERIFICATION of ldlsolve:\n");
-        #endif
-    #endif
-    #ifdef VERBOSE
-    printf(" Maximum abs. rel. error %e\n", maxrelerr);
-    int tol = TOL;
-    printf(" Thread 0 will return max rel err. TOl = %d\n",tol);
-    #endif
-    return (int)(maxrelerr*TOL);
-}
 
 int smain(uint32_t core_id) {
 // for verification purposes have different solve stages.
@@ -97,7 +38,7 @@ int smain(uint32_t core_id) {
         asm volatile(
             __RT_SSSR_SCFGWI(%[icfg], 31,     __RT_SSSR_REG_IDX_CFG)
             __RT_SSSR_SCFGWI(%[stride], 31,   __RT_SSSR_REG_STRIDE_0)
-            :: [stride]"r"(8), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
+            :: [stride]"r"(sizeof(FLOAT)), [icfg]"r"(__RT_SSSR_IDXSIZE_U16)
             : "memory"
         );
     }

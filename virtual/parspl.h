@@ -1,6 +1,7 @@
 #ifndef  KERNEL_H
 #define KERNEL_H
 #include <stdint.h>
+#include "types.h"
 
 // parspl linear system solution
 void solve(int core_id);
@@ -23,7 +24,7 @@ void SSSR_PQDLDL_Ltsolve(uint32_t core_id);
 typedef struct {
     const unsigned int n;         // shape(mat) = (n,n)
     const unsigned int rowa;      // row/column offset
-    const double * const mat;            // inverse matrix
+    const FLOAT * const mat;            // inverse matrix
     const uint16_t * const assigned_rows;
     const unsigned int num_rows;  // len(assigned_rows)
 } Diaginv;
@@ -32,7 +33,7 @@ typedef struct {
     const uint16_t * const assigned_cols;
     const uint16_t * const len_cols;   // length of each column
     const uint16_t * const ri;           // row index
-    const double * const rx;             // row data
+    const FLOAT * const rx;             // row data
     const uint16_t num_cols;      // number of columns
     const uint16_t num_data;      // length of ri,rx
     const uint16_t reductiona;    // reduction offset in bp_tmpH
@@ -42,7 +43,7 @@ typedef struct {
 typedef struct {
     const uint16_t * const ri;
     const uint16_t * const ci;
-    const double * const data;
+    const FLOAT * const data;
     const uint16_t assigned_data;
 } Mapping;
 

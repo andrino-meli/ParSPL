@@ -797,6 +797,7 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             permutation = None
         fc.write('#include "workspace.h"\n')
         fh.write('#include <stdint.h>\n')
+        fh.write('#include "types.h"\n\n')
         fh.write(f'#define {args.case.upper()}\n')
         fh.write(f'#define LINSYS_N ({linsys.n})\n')
          
