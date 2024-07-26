@@ -252,19 +252,19 @@ class Collist(Tile,dict):
 
         # add data
         dat = {}
-        dat[cols] = list2array(cols_dat,cols,base=16)
-        dat[len_cols] = list2array(len_cols_dat,len_cols,base=16)
-        dat[ri] = list2array(ri_dat,ri,base=16)
-        dat[rx] = np.array(rx_dat)
-        kbs = Kernel.COLLIST_LTSOLVE
+        kfe = Kernel.COLLIST_LSOLVE
         if self.assigned_data() == 0:
             # in case the core process no data we only support the reduction effort
             args = f'NULL, NULL, NULL, NULL, 0, 0, {self.reductiona[h]}, {self.reductionlen[h]}' 
-            args_fe,args_bs = None, argstruct
-            kfe = Kernel.SYNCH
+            args_fe,args_bs = argstruct, None
+            kbs = Kernel.SYNCH
         else:
+            dat[cols] = list2array(cols_dat,cols,base=16)
+            dat[len_cols] = list2array(len_cols_dat,len_cols,base=16)
+            dat[ri] = list2array(ri_dat,ri,base=16)
+            dat[rx] = np.array(rx_dat)
             args = f'{cols}, {len_cols}, {ri}, {rx}, {len(cols_dat)}, {len(ri_dat)}, {self.reductiona[h]}, {self.reductionlen[h]}' 
-            kfe = Kernel.COLLIST_LSOLVE
+            kbs = Kernel.COLLIST_LTSOLVE
             args_fe,args_bs = argstruct, argstruct
         dat[argstruct] = f'Collist {argstruct} = '+'{'+ args + '};\n'
 
