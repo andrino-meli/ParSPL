@@ -39,6 +39,14 @@ void solve(int core_id){
                 diaginv_ltsolve((Diaginv *) argstruct_joined[argidx]);
                 argidx++;
                 break;
+            case FOLD_LSOLVE:
+                fold_lsolve((Fold *) argstruct_joined[argidx]);
+                argidx++;
+                break;
+            case FOLD_LTSOLVE:
+                fold_ltsolve((Fold *) argstruct_joined[argidx]);
+                argidx++;
+                break;
             case MAPPING_LSOLVE:
                 mapping_lsolve((Mapping *) argstruct_joined[argidx], core_id);
                 argidx++;
@@ -386,6 +394,101 @@ void diaginv_ltsolve(Diaginv const * s){
     }
 }
 #endif
+
+
+//#if defined PARSPL && ! defined SSSR
+#if defined PARSPL
+void fold_lsolve(FOLD const * s){
+    //go through row by row (of T) and compute dot-product
+    __RT_SEPERATOR
+    for(unsigned int i = 0; i < s->num_rows; i++){
+        unsigned int row = s->assigned_rows[i];
+        unsigned int base = row-1;
+        // dot product of row and bp accessing a row in fold is intricate!
+        //printf("diaginv_lsolve: processing row %d, row+rowa %d\n",row,row+s->rowa);
+        FLOAT val = 0;
+        if (base < s.fold_dim0) {
+            for(unsinged int j = 0; j < base; j++){
+            
+            }
+        }
+        } else{
+        
+        }
+
+        // update bp_cp[row]
+        bp_cp[s->rowa + row] = val;
+    }
+    // synchronize
+    __RT_SEPERATOR
+    // update bp from bp_cp
+    // TODO: indirection copy
+    for(unsigned int i = 0; i < s->num_rows; i++){
+        unsigned int row = s->assigned_rows[i];
+        bp[s->rowa + row] = bp_cp[s->rowa + row];
+    }
+}
+/*
+def Fsolve(F,n,m,b):
+    s = len(b)
+    x = np.zeros((s))
+    x[0] = b[0]
+    # go through row by row (of T) and compute dot-product
+    # accessing a row of T in F is intricate
+    for i in range(1,s):
+        accu = 0
+        dprint(f'index {i}:')
+        base = i-1
+        if (i-1 < n):
+            for j in range(i):
+                val = F[base+j*m] # vertical stream
+                accu += b[j]*val  # stream from bp
+                dprint(base,j,val)
+        else:
+            for j in range(n):
+                val = F[base+j*m] # vertical stream
+                accu += b[j]*val  # strem from bp
+                dprint(base,j,val)
+            overshoot = i-n
+            dprint(f'calc overshoot {overshoot}')
+            base = (overshoot)*m
+            for j in range(overshoot):
+                val = F[base+j] # horizontal stream
+                accu += b[n+j]*val # continue streaming from bp
+                dprint(base,j,val)
+        x[i] = b[i] + accu
+    return x
+*/
+#endif
+
+/*
+def Ftsolve(F,n,m,b):
+    s = len(b)
+    x = np.zeros((s))
+    x[s-1] = b[s-1]
+    # go through column by column (of T) and compute dot-product
+    # accessing a column of T in F is easier than accessing a column
+    for i in range(0,s-1):
+        accu = 0
+        if i < n:
+            base = i*(m+1)
+            dprint(f'column {i}: base {base} (vertical)')
+            for j in range(s-i-1):
+                val = F[base+j] # horizontal stream
+                bval = b[i+j+1]
+                accu += bval*val
+                dprint(base,j,val,bval)
+        else:
+            base = (i-n)*(m+1) + m # precompute in an array! to complex.
+            dprint(f'column {i}: base {base} (horizontal)')
+            for j in range(m-i):
+                val = F[base+j*m] # horizontal stream
+                bval = b[i+j+1]
+                accu += bval*val
+                dprint(base,j,val,bval)
+        x[i] = b[i] + accu
+    return x
+*/
 
 
 #if defined SSSR && defined PARSPL

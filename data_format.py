@@ -17,6 +17,8 @@ class Kernel(Enum):
     MAPPING_LTSOLVE = 6
     SYNCH = 7
     DIAG_INV_MULT = 8
+    FOLD_LSOLVE = 9
+    FOLD_LTSOLVE = 10
 
 
 class Tile:
@@ -517,57 +519,66 @@ class DiagInv(Tile):
         dat[argstruct] = f'Diaginv {argstruct} = '+'{'+ args + '};\n'
         return (Kernel.DIAGINV_LSOLVE,Kernel.DIAGINV_LTSOLVE),(argstruct,argstruct),dat
 
+
 class Fold(DiagInv,Tile):
-    REDUCES = True
+    def __init__(self,dg,empty=False):
+        assert(type(dg) is DiagInv)
+        #self.__dict__ = dg.__dict__.copy()
+        self.n = dg.n
+        self.rowa = dg.rowa
+        self.rowz = dg.rowz
+        self.cola = dg.cola
+        self.colz = dg.colz
+        if not empty:
+            self.mTinv = -dg.dense_inverse
+            def to_Fold(mTinv):
+                ''' Convert triangular matrix to folded negative inverse'''
+                s = mTinv.shape[0]
+                (n,m) = (math.ceil(s/2),s-1)
+                print(f"Folding {s}x{s} to {n}x{m}")
+                F = np.zeros((n,m))
+                for c in range(s-1):
+                    for r in range(c+1,s):
+                        if r == c:
+                            pass # skip diagonal
+                        elif c < n:
+                            F[c][r-1] = mTinv[r][c]
+                        else:
+                            F[r-n][c-n] = mTinv[r][c]
+                return F
+            self.FoldMat = to_Fold(self.mTinv)
+
+        # rows assigned to this instance (offset by -collist.rowa)
+        self.assigned_rows = []
+
+        # get dimensions
+        self.n = self.rowz-self.rowa+1
+        self.offset = self.rowa
+
+    def is_rect(self):
+        return False
+
+    def nnz(self):
+        return np.count_nonzero(self.mTinv) - self.n
+
     def empty_copy(self):
-        raise NotImplementedError()
-        tmp = Collist(self.rowa,self.rowz,self.cola,self.colz)
-        return Fold(tmp)
+        tmp = DiagInv(Collist(self.rowa,self.rowz,self.cola,self.colz),empty=True)
+        # copy pointers to data
+        tmp.dense_triag = -self.mTinv
+        tmp = Fold(tmp,empty=True)
+        tmp.FoldMat = self.FoldMat
+        return tmp
 
-    def schedule(self,cores=range(HARTS)):
-        assert(len(self.assigned_rows) == 0)
-        raise NotImplementedError()
-        cols = []
-        for row in range(1,self.n):
-            val = self.Tinv[row][0:row]
-            assert(len(val) == row)
-            ri = [self.column_offset + i for i in range(row)]
-            meta.append((row+self.column_offset,len(val),ri,val))
-        meta = sorted(meta,key=lambda x: x[1],reverse=True)
-        # schedule rows onto Hearts in parallel
-        hearts = [i for i in range(HARTS)]
-        # schedule greedely longest operations first to least busy heart
-        slen = [0 for h in hearts]
-        Pmeta = [[] for heart in hearts]
-        PRi = [[] for heart in hearts]
-        PRx = [[] for heart in hearts]
-        if len(meta) == 0:
-            return MetaRowSched(Pmeta,PRi,PRx,method=name,slen=slen)
-        for j,(r,l,ri,rx) in enumerate(meta):
-            h = min(hearts,key=slen.__getitem__)
-            slen[h] += l
-            Pmeta[h].append((r,l))
-            PRx[h].extend(rx)
-            PRi[h].extend(ri)
-        name = self.__str__()
-        return MetaRowSched(Pmeta,PRi,PRx,method=name,slen=slen)
-
-    def to_Fold(self):
-        ''' Convert triangular matrix to folded negative inverse'''
-        T = -self.Tinv
-        s = T.shape[0]
-        (n,m) = (math.ceil(s/2),s-1)
-        print(f"Folding {s}x{s} to {n}x{m}")
-        F = np.zeros((n,m))
-        for c in range(s-1):
-            for r in range(c+1,s):
-                if r == c:
-                    pass # skip diagonal
-                elif c < n:
-                    F[c][r-1] = T[r][c]
-                else:
-                    F[r-n][c-n] = T[r][c]
-        return F
+    def codegen(self,s,h):
+        assrow = f'{self}_h{h}_assigned_rows'
+        fold = f'{self}_fold'
+        argstruct = f'{self}_h{h}_args'
+        dat = {}
+        args = f'{self.n}, {self.rowa}, {fold}, {assrow}, {len(self.assigned_rows)}'
+        dat[assrow] = np.array(self.assigned_rows,dtype=np.uint16)
+        dat[fold] = self.FoldMat
+        dat[argstruct] = f'Fold {argstruct} = '+'{'+ args + '};\n'
+        return (Kernel.FOLD_LSOLVE,Kernel.FOLD_LTSOLVE),(argstruct,argstruct),dat
 
 class Csc:
     def __init__(self, Lp, Li, Lx, n, name=""):

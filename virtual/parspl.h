@@ -30,6 +30,14 @@ typedef struct {
 } Diaginv;
 
 typedef struct {
+    const unsigned int n;         // shape(mat) = (n,n)
+    const unsigned int rowa;      // row/column offset
+    const FLOAT * const fold;            // inverse matrix, folded
+    const uint16_t * const assigned_rows;
+    const unsigned int num_rows;  // len(assigned_rows)
+} Fold;
+
+typedef struct {
     const uint16_t * const assigned_cols;
     const uint16_t * const len_cols;   // length of each column
     const uint16_t * const ri;           // row index
@@ -66,6 +74,26 @@ void diaginv_ltsolve(Diaginv const * s);
 /* 
  * Solves: x = mat^T*bp
  *         and stores x in bp_cp
+ * Synchr: synchronizes cores
+ * Copies: relevent part of bp_cp to bp
+ */
+
+void fold_lsolve(Fold const * s);
+/* 
+ * Solves: x = fold*bp
+ *         and stores x in bp_cp
+ *         fold however is stored folded:
+ *         so a more complex data access is required
+ * Synchr: synchronizes cores
+ * Copies: relevent part of bp_cp to bp
+ */
+
+void fold_ltsolve(Fold const * s);
+/* 
+ * Solves: x = fold^T*bp
+ *         and stores x in bp_cp
+ *         fold however is stored folded:
+ *         so a more complex data access is required
  * Synchr: synchronizes cores
  * Copies: relevent part of bp_cp to bp
  */

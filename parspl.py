@@ -10,8 +10,8 @@ from matplotlib.patches import Patch
 import networkx as nx
 
 from bfloat16 import bfloat16
-from data_format import Csc, Triag
-from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping, CscTile
+from data_format import Csc, Triag 
+from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping, CscTile, Fold
 from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array, list_flatten
 import general
@@ -305,13 +305,19 @@ def assign_kernel_to_tile(tiles):
             tiles[i][i] = Mapping(triag)
         elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
             print(f"DENSIFY: {triag}")
-            tiles[i][i] = DiagInv(triag)
+            diagtile = DiagInv(triag)
+            if args.fold_kernel:
+                diagtile = Fold(diagtile)
+            tiles[i][i] = diagtile
         elif triag.density() < 0.05:
             print(f"SPARSIFY: {triag}")
             raise NotImplementedError()
         else:
             eprint(f'Triag "{triag}" is neither sparse nor dense ({triag.density()*100:.1f}%). Inflating memory by inverting. Consider subcutting it.')
-            tiles[i][i] = DiagInv(triag)
+            diagtile = DiagInv(triag)
+            if args.fold_kernel:
+                diagtile = Fold(diagtile)
+            tiles[i][i] = diagtile
             #raise NotImplementedError()
 
     # decide on kernel for the rest
@@ -1506,6 +1512,8 @@ parser.add_argument('--level_thr', type=int, default=None,
     help='Level threshold for partly level scheduling.')
 parser.add_argument('--auto_level_thr', action='store_true', default=None,
     help='Automatically find a reasonable threshold and partly level schedule accordingly.')
+parser.add_argument('--fold_kernel', action='store_true', default=None,
+    help='Use the fold kernel instead of DiagInv as storage scheme for dense triangular matrices.')
 parser.add_argument('--occupation', action='store_true',
     help='Compute row/column occupation, so number of elements.')
 parser.add_argument('--intra_level_reorder', action='store_true',
