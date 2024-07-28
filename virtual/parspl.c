@@ -468,18 +468,22 @@ void collist_lsolve(Collist const * s, int core_id) {
     // synchronize
     // reduce bp_tmp1 up to bp_tmp7 into bp
     unsigned int i = s-> reductiona;
-    asm volatile(
-       "_collist_lsolve_red: \n"
-        __RT_SSSR_SCFGWI(%[len],       31,    __RT_SSSR_REG_BOUND_0)
-        __RT_SSSR_SCFGWI(%[lenbp],      2,    __RT_SSSR_REG_BOUND_0)
-        "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
-        "mv      zero, a6                    \n" //_rt_fpu_fence_full();
-        "csrr    zero,0x7c2                  \n" // __rt_barrier();
-        "csrr    zero, mcycle                \n"
-        __RT_SSSR_SCFGWI(%[bp],         2,    __RT_SSSR_REG_RPTR_0)
-        :: [len]"r"(N_CCS-1), [lenbp]"r"(s->reductionlen-1), [bp]"r"(&bp[i])
-        : "memory", "zero", "a6", "fa1"
-    );
+    if(s-> reductionlen != 0){ // TODO: filter this in codegen
+        asm volatile(
+           "_collist_lsolve_red: \n"
+            __RT_SSSR_SCFGWI(%[len],       31,    __RT_SSSR_REG_BOUND_0)
+            __RT_SSSR_SCFGWI(%[lenbp],      2,    __RT_SSSR_REG_BOUND_0)
+            "fmv.x.w a6, fa1                     \n" //_rt_fpu_fence_full();
+            "mv      zero, a6                    \n" //_rt_fpu_fence_full();
+            "csrr    zero,0x7c2                  \n" // __rt_barrier();
+            "csrr    zero, mcycle                \n"
+            __RT_SSSR_SCFGWI(%[bp],         2,    __RT_SSSR_REG_RPTR_0)
+            :: [len]"r"(N_CCS-1), [lenbp]"r"(s->reductionlen-1), [bp]"r"(&bp[i])
+            : "memory", "zero", "a6", "fa1"
+        );
+    } else {
+        __RT_SEPERATOR
+    }
     while( i+1 < s-> reductiona + s->reductionlen ){
         FLOAT val1;
         FLOAT val2;
