@@ -5,6 +5,7 @@ from matplotlib.patches import Patch
 import matplotlib
 import math
 from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette, list2array
+from general import GRAY_COLOR
 from bfloat16 import bfloat16
 from enum import Enum
 
@@ -100,11 +101,11 @@ class Tile:
             if self.is_diag():
                 xpos = -0.5 + self.colz
                 ypos = -0.5 + self.rowa
-                txt = ax.text(xpos,ypos,label,fontsize=15,color=color,ha='left',va='bottom')
+                txt = ax.text(xpos,ypos,label,color=color,ha='left',va='bottom')
             else:
                 xpos = -0.5 + self.cola + 0.5*(self.colz-self.cola)
                 ypos = -0.5 + self.rowa + 0.5*(self.rowz-self.rowa)
-                txt = ax.text(xpos,ypos,label,fontsize=15,color=color,ha='center',va='center')
+                txt = ax.text(xpos,ypos,label,color=color,ha='center',va='center')
             plotobjs.append(txt)
         return plotobjs
 
@@ -487,7 +488,7 @@ class DiagInv(Tile):
                     sq_dict[r][c].set_color(color)
                 else:
                     border = -0.2 # fillin rectangles are displayed smaller in size
-                    box = plt.Rectangle((c-.5-border,r-.5-border), 1+2*border, 1+2*border, fc=color ,ec='lime',lw=1)
+                    box = plt.Rectangle((c-.5-border,r-.5-border), 1+2*border, 1+2*border, fc=color ,ec='lime',lw=1, zorder=2)
                     patches.append(box)
         return patches
 
@@ -657,13 +658,12 @@ class Csc:
         n = len(Lp) - 1
 
         def get_plot_rect(x,y,diag=False,color=None,border=0):
+            c = GRAY_COLOR
             if color is not None:
                 c = color
             elif diag:
                 c = (0.4,0.4,0.4)
-            else:
-                c = (0,0,0)
-            return plt.Rectangle((x-.5+border,y-.5+border), 1+2*border, 1+2*border, fc=c,ec=c,lw=linewidth)
+            return plt.Rectangle((x-.5+border,y-.5+border), 1+2*border, 1+2*border, fc=c,ec=c,lw=linewidth, zorder=1)
 
         # Color values
         vmin=np.min(np.abs(Lx))
@@ -701,10 +701,10 @@ class Csc:
         ax.set(xlim=(-0.5, n-0.5), ylim=(-0.5, n-0.5))
         # Add line diagonal
         ax.plot([-0.5,n-0.5],[-0.5,n-0.5],color='k',linewidth=0.5)
-
-        for row in sq_dict:
-            for col in sq_dict[row]:
-                ax.add_patch(sq_dict[row][col])
+        # add all non-zero elements repr. as rectangles
+        for r in sq_dict.values():
+            for v in r.values():
+                ax.add_patch(v)
 
         if multicore_coloring:
             elems = []

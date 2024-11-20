@@ -7,12 +7,12 @@ from scipy.sparse import csc_matrix
 import scipy.sparse as spa
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.collections import PatchCollection
 import networkx as nx
 
-from bfloat16 import bfloat16
 from data_format import Csc, Triag
 from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping, CscTile
-from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint
+from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint, GRAY_COLOR
 from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array, list_flatten
 import general
 
@@ -905,7 +905,7 @@ def interactive_plot_schedule(L,schedule,cuts):
     # legend
     elems = []
     for h,c in zip(range(HARTS),color_palette):
-        patch = Patch(facecolor=c, edgecolor=None, label=f'Hart {h}')
+        patch = Patch(facecolor=c, edgecolor=None, label=f'hart {h}')
         elems.append(patch)
     ax.legend(handles=elems, loc='upper right')
 
@@ -947,19 +947,21 @@ def interactive_plot_schedule(L,schedule,cuts):
                     print(f' H{h} {tile}')
                     patches = tile.color_dict(sq_dict,color_palette[h])
                     patchlist.extend(patches)
-                    rect = tile.show_on_plot(ax,number=synch_num)
-                    plotobjs.extend(rect)
+                    if h == 0: #TODO: different harts could be allocated to different kernels!
+                        rect = tile.show_on_plot(ax,number=synch_num)
+                        plotobjs.extend(rect)
         plt.pause(0.001)
 
-def plot_schedule(L,schedule,cuts):
+def plot_schedule(L,schedule,cuts,color_harts=True):
     (fig,ax,sq_dict) = L.plot(uselx=False)
 
     # legend
-    elems = []
-    for h,c in zip(range(HARTS),color_palette):
-        patch = Patch(facecolor=c, edgecolor=None, label=f'Hart {h}')
-        elems.append(patch)
-    ax.legend(handles=elems, loc='upper right')
+    if color_harts:
+        elems = []
+        for h,c in zip(range(HARTS),color_palette):
+            patch = Patch(facecolor=c, edgecolor=None, label=f'hart {h}')
+            elems.append(patch)
+        ax.legend(handles=elems, loc='upper right')
 
     # Color according to schedule
     patchlist = []
@@ -968,10 +970,16 @@ def plot_schedule(L,schedule,cuts):
             if tile is None:
                 pass
             else:
-                patches = tile.color_dict(sq_dict,color_palette[h])
+                color_value = color_palette[h]
+                if not color_harts:
+                    color_value = GRAY_COLOR
+                # let the tile color the patches
+                patches = tile.color_dict(sq_dict,color_value)
+                # add all fillins if introduced by the tile
                 for p in patches:
                     patchlist.append(ax.add_patch(p))
-                tile.show_on_plot(ax,number=synch_num)
+                if h == 0: #TODO: different harts could be allocated to different kernels!
+                    tile.show_on_plot(ax,number=synch_num)
     plt.show()
 
 
@@ -984,27 +992,33 @@ def read_cuts(problem,wd):
             cuts.append(int(l))
     return cuts
 
-def cut2lines(cuts):
+def cut2lines(cuts,graph_part_cuts):
     # convert cut array to lines (points in x,y)
-    x = []; y = []
+    xr = []; yr = []
+    xg = []; yg = []
     n = cuts[-1]
     s = n
     for s2 in cuts[1:-1]:
+        x,y = (xr,yr)
+        if graph_part_cuts != None and s2 in graph_part_cuts:
+            x,y = (xg,yg)
         #x.extend([0.5,s2+0.5,s2+0.5,None])
         #y.extend([s2+0.5,s2+0.5,s+0.5,None])
         x.extend([-0.5,s2-0.5,s2-0.5,None])
         y.extend([s2-0.5,s2-0.5,n-0.5,None])
         s = s2
-    return (x,y)
+    return (xr,yr,xg,yg)
 
-def plot_cuts(problem,ax,n,wd,cuts=None):
+def plot_cuts(problem,ax,n,wd,cuts=None,graph_part_cuts=None):
     # read in cuts array
     if cuts is None:
         cuts = read_cuts(problem,wd)
     verify_cuts(cuts,n) # verify + sort
     print(f"redrawing cuts at: {cuts}")
-    (x,y) = cut2lines(cuts)
-    lines = ax.plot(x,y,color='r',linewidth=1.5)
+    (xr,yr,xg,yg) = cut2lines(cuts,graph_part_cuts)
+    lines = ax.plot(xr,yr,color='r',linewidth=1.5)
+    lines2 = ax.plot(xg,yg,color='c',linewidth=1.5)
+    lines.extend(lines2)
     return lines
 
 def live_cuts(problem,L,wd,uselx=True,cuts=None):
@@ -1356,6 +1370,7 @@ def main(args):
     # Read Cutfile
     # TODO: restructure!
     cuts = None
+    graph_part_cuts = None
     if args.live_cuts:
         live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
     if args.use_cutfile or args.live_cuts:
@@ -1378,13 +1393,15 @@ def main(args):
                 for l in range(level_thr+1):
                     cuts.append(cuts[-1] + bins[l])
                 bprint(f'\nCuts based on partial level scheduling: ',*cuts)
-            # heuristically compute cuts based on recursive graph partitioning
-            tmpcuts = find_optimal_cuts(L,cuts[-1],L.n)
-            bprint(f'\nCuts based on heuristic scheduling: ',*tmpcuts)
-            # heuristically compute cuts based on recursive graph partitioning
-            cuts.extend(tmpcuts)
-            cuts.append(L.n)
-            bprint(f'\nCUTTING based on partial level scheduling and HEURISTIC graph partitioning at : ',*cuts)
+            if args.heur_graph_cut or args.alap:
+                # heuristically compute cuts based on recursive graph partitioning
+                graph_part_cuts = find_optimal_cuts(L,cuts[-1],L.n)
+                bprint(f'\nCuts based on heuristic scheduling: ',*graph_part_cuts)
+                # heuristically compute cuts based on recursive graph partitioning
+                cuts.extend(graph_part_cuts)
+                bprint(f'\nCUTTING based on partial level scheduling and HEURISTIC graph partitioning at : ',*cuts)
+    if cuts[-1] != L.n:
+        cuts.append(L.n)
 
     if args.occupation:
         bprint('\nCalculate row and column occupation:')
@@ -1421,7 +1438,7 @@ def main(args):
             if args.interactive_schedule:
                 interactive_plot_schedule(L,schedule_fe,cuts)
             elif args.plot:
-                plot_schedule(L,schedule_fe,cuts)
+                plot_schedule(L,schedule_fe,cuts,color_harts=not args.gray_plot)
         elif args.solve_csc:
             cuts = None
             schedule_fe = [[Empty(0,0,0,0) for h in range(HARTS)]]
@@ -1434,7 +1451,7 @@ def main(args):
             schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
     elif args.plot:
        (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
-       plot_cuts(args.test,ax,L.n,wd=args.wd,cuts=cuts)
+       plot_cuts(args.test,ax,L.n,wd=args.wd,cuts=cuts,graph_part_cuts=graph_part_cuts)
        plt.show()
 
     if args.codegen and args.parspl:
@@ -1530,6 +1547,8 @@ parser.add_argument('--wd', type=str, default='.',
     help='Working directory.')
 parser.add_argument('--numerical_analysis', action='store_true',
     help='Working directory.')
+parser.add_argument('--heur_graph_cut', action='store_true',
+    help='Heuristic Graph partitioning/cutting using max-flow min-cut theorem to automatically extract dense lower triangular submatrices along the diagonal')
 parser.add_argument('--alap', action='store_true',
     help='As Late As possible scheduling in optimization.')
 parser.add_argument('--sssr', action='store_true',
