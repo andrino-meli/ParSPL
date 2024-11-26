@@ -39,8 +39,10 @@ pip3 install argcomplete, networkx, matplotlib, scipy, pyqt5, bfloat16
 
 In case of some errors consider downgrading some packages.
 The following versions are shown to work:
+```
 % python3 --version
 Python 3.12.4
+
 % pip3 list
 Package         Version
 --------------- -----------
@@ -63,6 +65,7 @@ PyQt5_sip       12.15.0
 python-dateutil 2.9.0.post0
 scipy           1.14.1
 six             1.16.0
+```
 
 # Citing
 We hope You find utility in ParSPL we encourage you to:
