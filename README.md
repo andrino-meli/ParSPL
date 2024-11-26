@@ -21,7 +21,7 @@ The preprocessing steps are visualized in **a)** to **f)**.
 For example: running an MPC controller using the OSQP solver results in such a computation.
 
 
-# paper
+# research publication
 ParSPL was developed in the context of thermal and energy management for high performance computing (HPC) chips.
 Think: voltage and frequency scaling on steroids.
 
@@ -30,11 +30,11 @@ For very large problems we achieved a 7x speedup on an 8-core embedded platform.
 When using memory streaming hardware extensions one can utilize the concurrency even further.
 We demonstrated a **33x speedup** with ParSPL using SSSRs.
 
-The corresponding published paper is: TODO.
+The corresponding published paper can be found at TODO and explains the methodology behind ParSPL.
 The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
 
 
-# Usage
+# usage
 ## python setup
 ParSPL is a C-code generator written in python.
 A virtual environment and all required dependencies are installed by running
@@ -74,10 +74,6 @@ Play and experiment with many options of `parspl.py`.
 We hope You find utility in ParSPL we encourage you to:
 - put a start on this repo
 - cite us:
-
-# processing steps
-It is helpful to visualize the preprocessing steps to find areas of improvement.
-
 
 # directory structure
 ```
