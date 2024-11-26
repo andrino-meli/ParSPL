@@ -1,5 +1,5 @@
 # ParSPL
-ParSPL is a code generator to **parallelise repeated solutions of a sparse linear systems** on an embedded platform.
+ParSPL is a code generator to **parallelise repeated solutions of a sparse linear systems** on embedded platforms.
 In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
 You want it if you can trade-off **low compile-time with high runtime performance**.
 
@@ -15,6 +15,7 @@ for x repeatedly and in parallel. Repeatedly means:
 - the right hand side vector ```b``` changes (input)
 - the vector ```x``` is the computed solution (output)
 Because ```A``` is static we can do a compile time decomposition ```A=LDL^T```.
+
 ParSPL then further exploits the problem specific sparsity structure in the triangular ```L``` matrix to maximize concurrent computation.
 The preprocessing steps are visualized in **a)** to **f)**.
 
@@ -44,8 +45,8 @@ A virtual environment and all required dependencies are installed by running
 ## autocompletion
 For optional but usefull python argument autocompletion install and globaly activate argcomplete with:
 ```
-pip3 install argcomplete
-activate-global-python-argcomplete
+>pip3 install argcomplete
+>activate-global-python-argcomplete
 ```
 ## seting up the linear system problem
 To allow for direct experimentation certain linear systems are prestored. List them with
