@@ -1,4 +1,6 @@
 # ParSPL
+![Preview](assets/parspl.jpg)](docs/parspl.pdf)
+
 ParSPL is a code generator to **parallelise repeated solutions of a sparse linear systems** on an embedded platform.
 In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
 You want it if you can trade-off **low compile-time with high runtime performance**.
@@ -28,7 +30,6 @@ We demonstrated a **33x speedup** with ParSPL using SSSRs.
 The corresponding published paper is: TODO.
 The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
 
-[![Preview](assets/parspl.png)](docs/parspl.pdf)
 
 # Usage
 ## python setup
