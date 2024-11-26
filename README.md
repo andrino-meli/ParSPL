@@ -85,27 +85,24 @@ We hope You find utility in ParSPL we encourage you to:
 ├── data_format.py
 ├── draw_mat_gui.py             # a script where one can custom generate L-matrix layouts by drawing for testing the effectiveness of pattern recognition
 ├── general.py
-├── solve.py
-├── venv                        #python virtual environment
-├── src
+├── venv                        # python virtual environment
+├── src                         # directory of linear system files
 │   ├── dummy_2level.json
-│   ├── dummy_autocat.json
 │   ├── dummy_collist.json
 │   ├── _HPC_3x3_H2.json
-│   ├── _HPC_3x3_H4.json
 │   ├── _HPC_4x4_H2.json
 ├── build                       # resulting generated C files
 │   └── _HPC_3x3_H2
 │       ├── scheduled_data.h
 │       ├── workspace.c
 │       └── workspace.h
-└── virtual
+└── virtual                     # virtual execution environment simulating a multicore embedded platform with linux pthread (mainly for functional verification and as a usage example)
     ├── Makefile
     ├── runtime.h               # environment specific functions and parameters, **edit according to the target embedded platform**
     ├── parspl.c                # main parspl C file that implements all the corresponding kernels and the scheduler
     ├── parspl.h                # **the function you want to call is `solve(core_id)`**
     ├── main.c                  # repeated calls to the parspl linear system solver
-    ├── virtual_main.c          # a wrapper of parspl.c for emulation with linux pthread
+    ├── virtual_main.c          # a wrapper of parspl.c for emulation with pthread
     ├── verify.h
     ├── types.h
     ├── scheduled_data.h -> ../build/_HPC_3x3_H2/scheduled_data.h
