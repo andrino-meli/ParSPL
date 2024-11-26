@@ -27,48 +27,88 @@ We demonstrated a **33x speedup** with ParSPL using SSSRs.
 
 The corresponding published paper is: TODO.
 The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
-Specifically the HPC management was 
 
-# python setup
-ParSPL is a C-code generator written in python. The aim is to 
-Create and activate a virtual environment and install required packages
-```
-python3 -m venv ./venv
-source ./venv/bin/activate
-pip3 install argcomplete, networkx, matplotlib, scipy, pyqt5, bfloat16
-```
+[![Preview](assets/parspl.png)](docs/parspl.pdf)
 
-In case of errors consider version checking packages.
-The following should work:
+# Usage
+## python setup
+ParSPL is a C-code generator written in python.
+A virtual environment and all required dependencies are installed by running
 ```
-% python3 --version
-Python 3.12.4
+> make setup
+```
+## autocompletion
+For optional but usefull python argument autocompletion install and globaly activate argcomplete with:
+```
+pip3 install argcomplete
+activate-global-python-argcomplete
+```
+## seting up the linear system problem
+To allow for direct experimentation certain linear systems are prestored. List them with
+```
+> make list
+```
+TODO: How to integrate parspl into Your project:
 
-% pip3 list
-Package         Version
---------------- -----------
-argcomplete     3.5.1
-bfloat16        1.2.0
-contourpy       1.3.1
-cycler          0.12.1
-fonttools       4.55.0
-kiwisolver      1.4.7
-matplotlib      3.5.3
-networkx        3.4.2
-numpy           1.26.0
-packaging       24.2
-pillow          11.0.0
-pip             24.0
-pyparsing       3.2.0
-PyQt5           5.15.11
-PyQt5-Qt5       5.15.15
-PyQt5_sip       12.15.0
-python-dateutil 2.9.0.post0
-scipy           1.14.1
-six             1.16.0
+## code generation and verification by emulation
+Select one and start with code generation.
 ```
+> ./parspl.py --test __HPC_3x3_H2 --codegen --link
+```
+This generates C code in the `build/_HPC_3x3_H2` directory.
+The `--link` option direclty symlinks the resulting files into the `virtual` directory.
+There the generated code can be verified on the development machine by using the gcc compiler and the linux pthread library.
+```
+virtual> make
+```
+Of course You are ment to include the generated C files into your embedded software workflow.
+
+Play and experiment with many options of `parspl.py`.
+
 
 # Citing
 We hope You find utility in ParSPL we encourage you to:
 - put a start on this repo
 - cite us:
+
+# processing steps
+It is helpful to visualize the preprocessing steps to find areas of improvement.
+
+
+# directory structure
+```
+.
+├── Makefile
+├── README.md
+├── parspl.py                   # main script for code generation
+├── data_format.py
+├── draw_mat_gui.py
+├── general.py
+├── solve.py
+├── venv                        #python virtual environment
+├── src
+│   ├── dummy_2level.json
+│   ├── dummy_autocat.json
+│   ├── dummy_collist.json
+│   ├── _HPC_3x3_H2.json
+│   ├── _HPC_3x3_H4.json
+│   ├── _HPC_4x4_H2.json
+├── build                       # resulting generated C files
+│   └── _HPC_3x3_H2
+│       ├── scheduled_data.h
+│       ├── workspace.c
+│       └── workspace.h
+└── virtual
+    ├── Makefile
+    ├── runtime.h               # environment specific functions and parameters, edit according to the target embedded platform
+    ├── parspl.c                # main parspl C file that implements all the corresponding kernels and the scheduler
+    ├── parspl.h                # the function you want to call is `solve(core_id)`
+    ├── main.c                  # repeated calls to the parspl linear system solver
+    ├── virtual_main.c          # a wrapper of parspl.c for emulation with linux pthread
+    ├── verify.h
+    ├── types.h
+    ├── scheduled_data.h -> ../build/_HPC_3x3_H2/scheduled_data.h
+    ├── workspace.c -> ../build/_HPC_3x3_H2/workspace.c
+    └── workspace.h -> ../build/_HPC_3x3_H2/workspace.h
+```
+

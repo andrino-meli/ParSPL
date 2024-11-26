@@ -6,7 +6,7 @@ import matplotlib
 import math
 from general import svdinvert, wprint, DEBUG, eprint, HARTS, dprint, color_palette, list2array
 from general import GRAY_COLOR
-from bfloat16 import bfloat16
+#from bfloat16 import bfloat16
 from enum import Enum
 
 class Kernel(Enum):

@@ -1,53 +1,80 @@
 #!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
-import numpy as np
-import argparse, os, json, sys, subprocess
+import argparse
+import os
+import subprocess
 import argcomplete
-from scipy.sparse import csc_matrix
 import scipy.sparse as spa
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from matplotlib.collections import PatchCollection
 import networkx as nx
+import numpy as np
 
-from data_format import Csc, Triag
-from data_format import Kernel, Collist, Tile, DiagInv, Empty, SynchBuffer, Mapping, CscTile
-from general import escape, HARTS, eprint, wprint, bprint, DotDict, dprint, GRAY_COLOR
-from general import color_palette, DEBUG, ndarrayToCH, ndarrayToC, list2array, list_flatten
+from data_format import (
+    Triag,
+    Kernel,
+    Collist,
+    Tile,
+    DiagInv,
+    Empty,
+    SynchBuffer,
+    Mapping,
+    CscTile,
+)
+from general import (
+    escape,
+    HARTS,
+    eprint,
+    wprint,
+    bprint,
+    dprint,
+    GRAY_COLOR,
+    color_palette,
+    DEBUG,
+    ndarrayToCH,
+    ndarrayToC,
+    list2array,
+    list_flatten,
+)
 import general
 
 np.random.seed(0)
-CAT_CMD = 'bat'
+CAT_CMD = "bat"
 DEBUG = False
 
-def workload_distribute_L(newLp,newLi,newLx):
+
+def workload_distribute_L(newLp, newLi, newLx):
     dtype_x = np.float64
-    LpStart = [] # Offset into Lx.
-    LpLenTmp = [ list() for i in range(HARTS) ]
-    LxNewTmp = [ list() for i in range(HARTS) ]
-    LiNewTmp = [ list() for i in range(HARTS) ]
-    for i in range(len(newLp)-2):
-        tmp = int(newLp[i+1] - newLp[i])
+    LpStart = []  # Offset into Lx.
+    LpLenTmp = [list() for i in range(HARTS)]
+    LxNewTmp = [list() for i in range(HARTS)]
+    LiNewTmp = [list() for i in range(HARTS)]
+    for i in range(len(newLp) - 2):
+        tmp = int(newLp[i + 1] - newLp[i])
         jobs = tmp // HARTS
         leftover = tmp % HARTS
         # compute how many jobs each core has to do and append the correspoding
         #  data to LxNew and LiNew.
         for core_id in range(HARTS):
             tmp = -1
-            if (leftover != 0 and leftover > core_id):
-                tmp = jobs+1
+            if leftover != 0 and leftover > core_id:
+                tmp = jobs + 1
             else:
                 tmp = jobs
-            #LpStart.append( len(LxNew) if tmp > 0 else -1 )
+            # LpStart.append( len(LxNew) if tmp > 0 else -1 )
             LpLenTmp[core_id].append(tmp)
-            index = [t*(HARTS) + core_id for t in range(tmp)]
-            halalu = [] # tmp for blocked Lx data
+            index = [t * (HARTS) + core_id for t in range(tmp)]
+            halalu = []  # tmp for blocked Lx data
             for l in index:
-                halalu.append(newLx[l+newLp[i]])
+                halalu.append(newLx[l + newLp[i]])
             LxNewTmp[core_id].extend(halalu)
-            tmparr = [newLi[l+newLp[i]] for l in index]
+            tmparr = [newLi[l + newLp[i]] for l in index]
             LiNewTmp[core_id].extend(tmparr)
-    LpLen = []; LxNew = []; LiNew = []; LpLenSum = []; LiNewR = []
+    LpLen = []
+    LxNew = []
+    LiNew = []
+    LpLenSum = []
+    LiNewR = []
     for i in range(HARTS):
         LpLen.extend(LpLenTmp[i])
         LpLenSum.append(sum(LpLenTmp[i]))
@@ -57,223 +84,245 @@ def workload_distribute_L(newLp,newLi,newLx):
         LiNewR.extend(LiNewTmp[i])
     LpStart = [0]
     for i in range(HARTS):
-        LpStart.append(LpLenSum[i]+LpStart[i])
-    print(f'inflating Lp to LpLen increasing size from {len(newLp)} to {len(LpStart)+len(LpLen)}.')
-    print(f'Average length in LpLen is {sum(LpLen)/len(LpLen)}')
+        LpStart.append(LpLenSum[i] + LpStart[i])
+    print(
+        f"inflating Lp to LpLen increasing size from {len(newLp)} to {len(LpStart)+len(LpLen)}."
+    )
+    print(f"Average length in LpLen is {sum(LpLen)/len(LpLen)}")
     # convert to numpy arrays
-    LpStart = list2array(LpStart,'LpStart',base=32)
-    LpLenSum = list2array(LpLenSum,'LpLenSum',base=32)
-    LpLen = list2array(LpLen,'LpLen',base=8)
-    LiNew = list2array(LiNew,'LiNew',base=16)
-    LiNewR = list2array(LiNewR,'LiNewR',base=16)
-    LxNew = np.array(LxNew,dtype=dtype_x)
+    LpStart = list2array(LpStart, "LpStart", base=32)
+    LpLenSum = list2array(LpLenSum, "LpLenSum", base=32)
+    LpLen = list2array(LpLen, "LpLen", base=8)
+    LiNew = list2array(LiNew, "LiNew", base=16)
+    LiNewR = list2array(LiNewR, "LiNewR", base=16)
+    LxNew = np.array(LxNew, dtype=dtype_x)
 
-    return (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR)
+    return (LpStart, LpLen, LpLenSum, LxNew, LiNew, LiNewR)
+
 
 class SubBlock:
-    ''' Iterator class for subparts of the L matrix.'''
-    def __init__(self,Lp,Li,Lx,start,stop):
-        assert(stop > start)
-        assert(start >= 0)
-        assert(len(Lp) > stop)
+    """Iterator class for subparts of the L matrix."""
+
+    def __init__(self, Lp, Li, Lx, start, stop):
+        assert stop > start
+        assert start >= 0
+        assert len(Lp) > stop
         self.start = start
         self.stop = stop
         self.Lx = Lx
         self.Li = Li
         self.Lp = Lp
-        self.cc = start #current column
+        self.cc = start  # current column
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        if not(self.stop > self.cc):
+        if not (self.stop > self.cc):
             raise StopIteration
         start = self.Lp[self.cc]
-        end = self.Lp[self.cc+1]
+        end = self.Lp[self.cc + 1]
         self.cc += 1
+
         def filter_fun(rowx):
             row, _ = rowx
             return row < self.stop
-        coliter = filter(filter_fun,zip(self.Li[start:end],self.Lx[start:end]))
-        return self.cc-1,coliter
+
+        coliter = filter(filter_fun, zip(self.Li[start:end], self.Lx[start:end]))
+        return self.cc - 1, coliter
+
 
 def sub_nnz(subiter):
-    assert(type(subiter) is SubBlock)
-    assert(subiter.cc == subiter.start)
+    assert type(subiter) is SubBlock
+    assert subiter.cc == subiter.start
     nnz = 0
-    for col,coliter in subiter:
+    for col, coliter in subiter:
         nnz += sum(1 for _ in coliter)
-    subiter.cc = subiter.start # reset iterator (otherwise we would use it up!)
+    subiter.cc = subiter.start  # reset iterator (otherwise we would use it up!)
     return nnz
 
+
 def sub_dense_size(subiter):
-    dim = subiter.stop-subiter.start
-    return dim*(dim-1)/2
+    dim = subiter.stop - subiter.start
+    return dim * (dim - 1) / 2
+
 
 def sub_dens(subiter):
-    ''' Compute density of triagonal block in L. '''
-    density = sub_nnz(subiter)/sub_dense_size(subiter)
+    """Compute density of triagonal block in L."""
+    density = sub_nnz(subiter) / sub_dense_size(subiter)
     return density
 
 
-def find_optimal_cuts(L,start,stop,depth=0,band=None,minsize=15):
+def find_optimal_cuts(L, start, stop, depth=0, band=None, minsize=15):
     DENSITY_THRESHOLD = 0.95
     # 80% fillin is okay if the triangle is at most 1/6 of the
     # The fundamental idea here is the smaller the triangle the less we care about the density
     # So the density per size threshold must be sufficient.
-    DENSITY_SIZE_THRESHOLD = 0.8 / (1/12)
+    DENSITY_SIZE_THRESHOLD = 0.8 / (1 / 12)
 
-    Lp,Li,Lx,n = L.Lp, L.Li, L.Lx, L.n
-    if (band is None):
-        band = (stop-start)/3
+    Lp, Li, Lx, n = L.Lp, L.Li, L.Lx, L.n
+    if band is None:
+        band = (stop - start) / 3
 
-    if not (stop > start+1+minsize):
-        print(f'FOC: stopping at minsize {minsize} for {start}-{stop}')
+    if not (stop > start + 1 + minsize):
+        print(f"FOC: stopping at minsize {minsize} for {start}-{stop}")
         return []
 
     if depth == 10:
-        wprint(f'FOC: stopping at max recursion depth for {start}-{stop}')
+        wprint(f"FOC: stopping at max recursion depth for {start}-{stop}")
         return []
 
-    subiter = SubBlock(Lp,Li,Lx,start,stop)
+    subiter = SubBlock(Lp, Li, Lx, start, stop)
     density = sub_dens(subiter)
-    relsize = (stop-start)/L.n
+    relsize = (stop - start) / L.n
     if density > DENSITY_THRESHOLD:
-        print(f'FOC: stopping at {start}-{stop} for absolute density threshold {DENSITY_THRESHOLD}')
+        print(
+            f"FOC: stopping at {start}-{stop} for absolute density threshold {DENSITY_THRESHOLD}"
+        )
         return []
-    if density/relsize > DENSITY_SIZE_THRESHOLD:
-        print(f'FOC: stopping at {start}-{stop} for density per relsize threshold {density/relsize}, threshold is {DENSITY_SIZE_THRESHOLD}')
+    if density / relsize > DENSITY_SIZE_THRESHOLD:
+        print(
+            f"FOC: stopping at {start}-{stop} for density per relsize threshold {density/relsize}, threshold is {DENSITY_SIZE_THRESHOLD}"
+        )
         return []
 
     # define weigh function based on distance between two nodes
-    def weight(a,b):
-        assert(b>a)
+    def weight(a, b):
+        assert b > a
         # ensure
-        if band is not None and b-a >= band:
+        if band is not None and b - a >= band:
             return 0
-        return 1.0/(-(b-a))**2
+        return 1.0 / (-(b - a)) ** 2
 
     # create directed, weighted graph
-    def subiter2weighted_graph(subiter,source,sink):
+    def subiter2weighted_graph(subiter, source, sink):
         G = nx.DiGraph()
-        G.add_nodes_from(range(sink,source+1))
+        G.add_nodes_from(range(sink, source + 1))
         edges = []
-        for col,coliter in subiter:
-            for (row,val) in coliter:
-                w = weight(col,row)
+        for col, coliter in subiter:
+            for row, val in coliter:
+                w = weight(col, row)
                 if w != 0:
-                    edges.append( (row,col,w) )
-        G.add_weighted_edges_from(edges, weight='capacity')
+                    edges.append((row, col, w))
+        G.add_weighted_edges_from(edges, weight="capacity")
         return G
 
     # create weighted graph
-    source, sink = stop-1, start
-    G = subiter2weighted_graph(subiter,source,sink)
+    source, sink = stop - 1, start
+    G = subiter2weighted_graph(subiter, source, sink)
     # calculate min-cut
-    cut_value, partition = nx.minimum_cut(G, source, sink, flow_func=nx.algorithms.flow.edmonds_karp)
-    #print(f'- depth {depth}, start {start}, stop {stop}')
-    #print(partition)
+    cut_value, partition = nx.minimum_cut(
+        G, source, sink, flow_func=nx.algorithms.flow.edmonds_karp
+    )
+    # print(f'- depth {depth}, start {start}, stop {stop}')
+    # print(partition)
     # extract cuts
     cuts = set()
-    part0,part1 = list(partition[0]),list(partition[1])
+    part0, part1 = list(partition[0]), list(partition[1])
     part0.sort()
     part1.sort()
     last = None
-    for part in [part0,part1]:
+    for part in [part0, part1]:
         if part[0] != start:
             cuts.add(part[0])
-        for i,p in enumerate(part[1:]):
-            if(part[i] +1 != p):
+        for i, p in enumerate(part[1:]):
+            if part[i] + 1 != p:
                 cuts.add(p)
     cutstmp = sorted(list(cuts))
     # from all the cuts choose the one closest to the middleo
-    diffmid = [ abs(c - start - (stop-start)/2) for c in cutstmp]
+    diffmid = [abs(c - start - (stop - start) / 2) for c in cutstmp]
     cut = cutstmp[np.argmin(diffmid)]
-    print(f'FOC: from min-cut-set {list(cutstmp)} selecting cut {cut} inbetween {start}-{stop}')
+    print(
+        f"FOC: from min-cut-set {list(cutstmp)} selecting cut {cut} inbetween {start}-{stop}"
+    )
     # check if cut is worth it. We devide smat into 3 parts:
     ## ---------------
     ## | lup  |      |
     ## ---------------
     ## | rect | lsub |
     ## ---------------
-    smat = SubBlock(Lp,Li,Lx,start,stop)
+    smat = SubBlock(Lp, Li, Lx, start, stop)
     smatnnz = sub_nnz(smat)
     smatfull = sub_dense_size(smat)
 
-    iterlup = SubBlock(Lp,Li,Lx,start,cut)
+    iterlup = SubBlock(Lp, Li, Lx, start, cut)
     lupnnz = sub_nnz(iterlup)
     lupfull = sub_dense_size(iterlup)
 
-    itersub = SubBlock(Lp,Li,Lx,cut,stop)
+    itersub = SubBlock(Lp, Li, Lx, cut, stop)
     lsubnnz = sub_nnz(itersub)
     lsubfull = sub_dense_size(itersub)
 
     rectnnz = smatnnz - lupnnz - lsubnnz
-    rectfull = (cut-start)*(stop-cut)
+    rectfull = (cut - start) * (stop - cut)
 
     continue_cutting = False
     # EITHER cut removes at least 5% of nnz() in smat
-    if (rectfull-rectnnz)/smatfull > 0.05:
+    if (rectfull - rectnnz) / smatfull > 0.05:
         continue_cutting = True
     # OR rect and (lsub or lup) is empty
     if rectnnz == 0 and (lupnnz == 0 or lsubnnz == 0):
         continue_cutting = True
-    #UNLESS
+    # UNLESS
     if not continue_cutting:
-        wprint(f'FOC: stopping to dissect {start}-{stop} because of useless cut at {cut} even though DENSITY_SIZE termination criterion is not reached.')
+        wprint(
+            f"FOC: stopping to dissect {start}-{stop} because of useless cut at {cut} even though DENSITY_SIZE termination criterion is not reached."
+        )
         return []
-
 
     # TODO: if an DAG graph based cut does not help AND we still miss the DENSITY_SIZE threshold
     #       consider using a binary search
     #       or just cut in the middle (or better maybee top 1/3)
 
     # recursively cut apart upper and lower
-    cutsu = find_optimal_cuts(L,start,cut,depth=depth+1)
-    cutsl = find_optimal_cuts(L,cut,stop,depth=depth+1)
+    cutsu = find_optimal_cuts(L, start, cut, depth=depth + 1)
+    cutsl = find_optimal_cuts(L, cut, stop, depth=depth + 1)
     # merge all cuts
-    cuts = [*cutsu,cut,*cutsl]
+    cuts = [*cutsu, cut, *cutsl]
     return cuts
 
-def verify_cuts(cuts,n):
-    cuts.sort()
-    assert(cuts[0] == 0)
-    assert(cuts[-1] == n)
-    for i in range(len(cuts)-1):
-        assert(cuts[i] < cuts[i+1])
 
-def tile_L(L,cuts):
-    ''' Cut appart L and return matrix representation of tiles. '''
+def verify_cuts(cuts, n):
+    cuts.sort()
+    assert cuts[0] == 0
+    assert cuts[-1] == n
+    for i in range(len(cuts) - 1):
+        assert cuts[i] < cuts[i + 1]
+
+
+def tile_L(L, cuts):
+    """Cut appart L and return matrix representation of tiles."""
     # verify data
     n = L.n
-    verify_cuts(cuts,n)
+    verify_cuts(cuts, n)
 
-    numcuts = len(cuts)-1
+    numcuts = len(cuts) - 1
     # tiles do not necessarilly have to be ordered
-    tiles = [[None for j in range(i+1)] for i in range(numcuts)]
+    tiles = [[None for j in range(i + 1)] for i in range(numcuts)]
 
-    def tile_from_index(row,col):
-        ''' Get index of tile based on index of matrix. '''
-        r = 0; c = 0
-        while(row >= cuts[r+1]):
+    def tile_from_index(row, col):
+        """Get index of tile based on index of matrix."""
+        r = 0
+        c = 0
+        while row >= cuts[r + 1]:
             r += 1
-        while(col >= cuts[c+1]):
+        while col >= cuts[c + 1]:
             c += 1
-        #print(f'row,col {row},{col} are found in tile {r},{c}')
+        # print(f'row,col {row},{col} are found in tile {r},{c}')
         return tiles[r][c]
 
     # compute cuts
     for i in range(numcuts):
-        for j in range(i+1):
-            tiles[i][j] = Collist(cuts[i],cuts[i+1]-1,cuts[j],cuts[j+1]-1)
+        for j in range(i + 1):
+            tiles[i][j] = Collist(cuts[i], cuts[i + 1] - 1, cuts[j], cuts[j + 1] - 1)
     # distribute data
     for col in range(n):
-        for i in range(L.Lp[col],L.Lp[col+1]):
+        for i in range(L.Lp[col], L.Lp[col + 1]):
             row = L.Li[i]
-            tile = tile_from_index(row,col)
-            tile.insert(row,col,L.Lx[i])
+            tile = tile_from_index(row, col)
+            tile.insert(row, col, L.Lx[i])
     return tiles
+
 
 def assign_kernel_to_tile(tiles):
     print()
@@ -281,77 +330,83 @@ def assign_kernel_to_tile(tiles):
     numcuts = len(tiles)
 
     def collist_is_mapping(cl):
-        assert(isinstance(cl,Collist))
-        rows = set() # set keeping track which rows are allready occupied
-        for col,(Li,Lx) in cl.items():
-            if len(Li) > 1: # check each column has only one element
+        assert isinstance(cl, Collist)
+        rows = set()  # set keeping track which rows are allready occupied
+        for col, (Li, Lx) in cl.items():
+            if len(Li) > 1:  # check each column has only one element
                 return False
             for el in Li:
                 if el in rows:
                     return False
             # add all rows that are present in curent col to rows set
             rows.update(Li)
-        return True           
+        return True
 
     # decide on kernel for diagonal tiles
     for i in range(numcuts):
         triag = tiles[i][i]
-        assert(isinstance(triag,Tile))
+        assert isinstance(triag, Tile)
         if triag.nnz() == 0:
-            tiles[i][i] = Empty(0,0,0,0)
+            tiles[i][i] = Empty(0, 0, 0, 0)
         elif collist_is_mapping(triag):
             print(f"MAPPING: {triag}")
             raise NotImplementedError()
             tiles[i][i] = Mapping(triag)
-        elif triag.density() > 0.8 or True: #TODO: make non_dense, non_empty diag kernels a thing
+        elif triag.density() > 0.8:
             print(f"DENSIFY: {triag}")
             tiles[i][i] = DiagInv(triag)
-        elif triag.density() < 0.05:
-            print(f"SPARSIFY: {triag}")
-            raise NotImplementedError()
+        # TODO: make non_dense, non_empty diag kernels a thing
+        # elif triag.density() < 0.05:
+        #    print(f"SPARSIFY: {triag}")
+        #    raise NotImplementedError()
         else:
-            eprint(f'Triag "{triag}" is neither sparse nor dense ({triag.density()*100:.1f}%). Inflating memory by inverting. Consider subcutting it.')
+            eprint(
+                f'Triag "{triag}" is neither sparse nor dense ({triag.density()*100:.1f}%). Inflating memory by inverting. Consider subcutting it.'
+            )
+            print(f"DENSIFY (ANYWAYS): {triag}")
             tiles[i][i] = DiagInv(triag)
-            #raise NotImplementedError()
+            # raise NotImplementedError()
 
     # decide on kernel for the rest
     # only assign mappings to rows where all non-diag tiles are mappings as well:
     # this is necessary for functional correctness (at least currently)
     MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS = 5
     all_mappings = {}
-    for i in range(1,numcuts):
+    for i in range(1, numcuts):
         mappings = []
         for j in range(i):
             rect = tiles[i][j]
-            assert(isinstance(rect,Collist))
+            assert isinstance(rect, Collist)
             if rect.empty():
                 continue
             is_mapping = collist_is_mapping(rect)
-            is_worth_it = (rect.rowz-rect.rowa) > MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS
+            is_worth_it = (rect.rowz - rect.rowa) > MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS
             if is_mapping and is_worth_it:
                 mappings.append(j)
             else:
                 if is_mapping and not is_worth_it:
-                    print(f'Ignoring Mapping {rect} due to {MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS=}.')
+                    print(
+                        f"Ignoring Mapping {rect} due to {MIN_ROW_SPAN_TO_AMORTIZE_MAPPINGS=}."
+                    )
                 # revert mappings list
                 if len(mappings) != 0:
-                    bprint(f'Ignoring Mapping in {mappings} due to {rect}.')
+                    bprint(f"Ignoring Mapping in {mappings} due to {rect}.")
                 mappings = []
                 break
         for j in mappings:
             rect = tiles[i][j]
-            print(f'MAPPING: {rect}')
+            print(f"MAPPING: {rect}")
             tiles[i][j] = Mapping(rect)
 
     if DEBUG:
         # DEBUG print tiles
         for til in tiles:
             for t in til:
-                print(f'{t}: {t.nnz()} nnz')
+                print(f"{t}: {t.nnz()} nnz")
 
 
-def optimize_tiles(tiles,n,args):
-    '''
+def optimize_tiles(tiles, n, args):
+    """
     Optimize and Merge tiles.
     Do dependency tree based scheduling of tiles.
     Remove empty dependencies.
@@ -364,30 +419,29 @@ def optimize_tiles(tiles,n,args):
     Returns:
     tiles_list (list): unordered, unstructured list of lists of tiles
                        each list corresponds to a synchronization level
-    '''
+    """
     # merge diagonal elements
     # TODO: DAG scheduling of subblocks
     numcuts = len(tiles)
-
 
     # merge all Collist below each other
     #  this basically ensures that collists are getting merged and scheduled ASAP
     #  when they are beneave each other
     #  otherwise we want them scheduled ALAP
     # remove emtpy tiles
-    for c in range(numcuts-1):
+    for c in range(numcuts - 1):
         tilecol = []
-        for r in range(c+1,numcuts):
+        for r in range(c + 1, numcuts):
             t = tiles[r][c]
             if t.empty():
                 tiles[r][c] = None
                 continue
-            if isinstance(t,Collist):
-                tilecol.append((t,r,c))
+            if isinstance(t, Collist):
+                tilecol.append((t, r, c))
         if len(tilecol) == 0:
             continue
-        for t,r,c in tilecol[1:]:
-            dprint(f'merge {t} into {tilecol[0][0]}')
+        for t, r, c in tilecol[1:]:
+            dprint(f"merge {t} into {tilecol[0][0]}")
             tilecol[0][0].merge(t)
             tiles[r][c] = None
 
@@ -410,45 +464,52 @@ def optimize_tiles(tiles,n,args):
     if args.alap:
         tile_list = list_flatten(tile_list)
         # create dependency tree
-        bprint('Building and optimizing dependency tree')
-        dprint('==== Tiles ====')
+        bprint("Building and optimizing dependency tree")
+        dprint("==== Tiles ====")
         for t in tile_list:
             dprint(t)
+
         class Node:
-            def __init__(self,tile):
+            def __init__(self, tile):
                 self.tile = tile
                 self.child = set()
                 self.parent = set()
                 self.level = 0
-            def add_dependency(self,other):
+
+            def add_dependency(self, other):
                 if self is other:
                     return
                 if self.is_child_of(other):
                     self.parent.add(other)
                 if self.is_parent_of(other):
                     self.child.add(other)
-            def is_parent_of(self,other):
+
+            def is_parent_of(self, other):
                 if self.tile.rowa > other.tile.colz:
                     return False
                 if self.tile.rowz < other.tile.cola:
                     return False
                 return True
-            def is_child_of(self,other):
+
+            def is_child_of(self, other):
                 return other.is_parent_of(self)
+
             def __repr__(self):
-                ch = ''; ph = ''
+                ch = ""
+                ph = ""
                 for c in self.child:
-                    ch += str(c.tile) + ', '
+                    ch += str(c.tile) + ", "
                 for p in self.parent:
-                    ph += str(p.tile) + ', '
-                return f'Node{self.tile} {self.level} -> child:[{ch}] parent:[{ph}]'
-                #return f'Node{self.tile} {self.level} '
+                    ph += str(p.tile) + ", "
+                return f"Node{self.tile} {self.level} -> child:[{ch}] parent:[{ph}]"
+                # return f'Node{self.tile} {self.level} '
+
         tree = [Node(t) for t in tile_list]
         # build dependency tree
         for s in tree:
             for o in tree:
                 s.add_dependency(o)
-        dprint('==== Tree ====')
+        dprint("==== Tree ====")
         for t in tree:
             dprint(t)
 
@@ -461,16 +522,17 @@ def optimize_tiles(tiles,n,args):
             def ASAP_level(node):
                 maxlevel = node.level
                 for c in node.child:
-                    c.level = max(node.level+1,c.level)
-                    maxlevel = max(maxlevel,ASAP_level(c))
+                    c.level = max(node.level + 1, c.level)
+                    maxlevel = max(maxlevel, ASAP_level(c))
                 return maxlevel
+
             reset_level(tree)
             maxlevel = 0
             for root in tree:
                 if len(root.parent) == 0:
                     newmax = ASAP_level(root)
-                    maxlevel = max(maxlevel,newmax)
-            level_list = [[] for i in range(maxlevel+1)]
+                    maxlevel = max(maxlevel, newmax)
+            level_list = [[] for i in range(maxlevel + 1)]
             for node in tree:
                 level_list[node.level].append(node)
             return level_list
@@ -479,30 +541,33 @@ def optimize_tiles(tiles,n,args):
             def ALAP_level(node):
                 minlevel = node.level
                 for p in node.parent:
-                    p.level = min(node.level-1,p.level)
-                    minlevel = min(minlevel,ALAP_level(p))
+                    p.level = min(node.level - 1, p.level)
+                    minlevel = min(minlevel, ALAP_level(p))
                 return minlevel
+
             reset_level(tree)
             minlevel = 0
             for leave in tree:
                 if len(leave.child) == 0:
                     minlevel = min(minlevel, ALAP_level(leave))
-            level_list = [[] for i in range(-minlevel+1)]
+            level_list = [[] for i in range(-minlevel + 1)]
             for node in tree:
-                level_list[-minlevel+node.level].append(node)
+                level_list[-minlevel + node.level].append(node)
             return level_list
 
         def optimize_level(levels):
-            for i,l in enumerate(levels):
+            for i, l in enumerate(levels):
                 cl = None
                 tmp = []
                 for node in l:
-                    if isinstance(node.tile,Collist):
+                    if isinstance(node.tile, Collist):
                         if cl is None:
                             cl = node
                             continue
-                        else: # merge
-                            dprint(f'Merging on same DAG level: \n\t\t{cl}\n\t\t {node}')
+                        else:  # merge
+                            dprint(
+                                f"Merging on same DAG level: \n\t\t{cl}\n\t\t {node}"
+                            )
                             cl.child.update(node.child)
                             cl.parent.update(node.parent)
                             cl.tile.merge(node.tile)
@@ -514,23 +579,23 @@ def optimize_tiles(tiles,n,args):
             return levels
 
         def print_levels(levels):
-            for i,l in enumerate(levels):
-                print(f'level {i:2}:')
-                for j,el in enumerate(l):
-                    print(f'{" "*5}| ',el)
+            for i, l in enumerate(levels):
+                print(f"level {i:2}:")
+                for j, el in enumerate(l):
+                    print(f'{" "*5}| ', el)
 
         if DEBUG:
-            print('\n\n ==== ASAP DAG tree levels ====')
+            print("\n\n ==== ASAP DAG tree levels ====")
             levels = asap_level(tree)
             assert len(tile_list) == len(list_flatten(levels))
             print_levels(levels)
 
-            print('\n\n ==== ALAP DAG tree levels ====')
+            print("\n\n ==== ALAP DAG tree levels ====")
             levels = alap_level(tree)
             assert len(tile_list) == len(list_flatten(levels))
             print_levels(levels)
 
-        print('\n\n ==== optimized DAG tree levels ====')
+        print("\n\n ==== optimized DAG tree levels ====")
         levels = alap_level(tree)
         assert len(tile_list) == len(list_flatten(levels))
         levels = optimize_level(levels)
@@ -542,12 +607,12 @@ def optimize_tiles(tiles,n,args):
 
     # determining firstbp/lastbp to remove non-used reduction range
     firstbp = n
-    lastbp = 0 #exclusive
+    lastbp = 0  # exclusive
     for tl in tile_list:
         for t in tl:
             if t.REDUCES:
-                firstbp = min(firstbp,t.rowa)
-                lastbp = max(lastbp,t.rowz+1)
+                firstbp = min(firstbp, t.rowa)
+                lastbp = max(lastbp, t.rowz + 1)
 
     # assign reduction range from [self.rowa to self.reduce_stop)
     stop = lastbp
@@ -557,26 +622,29 @@ def optimize_tiles(tiles,n,args):
         if t.REDUCES:
             t.reduce_stop = stop
             if stop <= t.rowa:
-                wprint(f'{t} should be mergable into another Collist.')
-            stop = min(t.rowa,stop)
+                wprint(f"{t} should be mergable into another Collist.")
+            stop = min(t.rowa, stop)
 
-    return tile_list,firstbp,lastbp
+    return tile_list, firstbp, lastbp
+
 
 def schedule_to_workers(tile_list):
-    ''' Scheduling Triangles and Rectangles onto processor cores.
+    """Scheduling Triangles and Rectangles onto processor cores.
     Parameters:
     tile_list (list(list)): A list of synchronization steps. Each step can contain multiple tiles in a list, to represent multiple parallelizable workloads.
     Returns:
     schedule_fe (list(tuple)): A list of synchronization steps. Each step is a tuple of WORKER elements. Each element defines the work to do for that specific processing core.
     schedule_bs (list(tuple)): Same but for the Backward Substitution.
-    '''
+    """
 
     schedule_fe, schedule_bs = [], []
     for work in tile_list:
         if len(work) > 1:
-            raise NotImplementedError("Multiple tiles, so inter-kernel workload balancing, is unimplemented")
+            raise NotImplementedError(
+                "Multiple tiles, so inter-kernel workload balancing, is unimplemented"
+            )
         tile = work[0]
-        dprint(f'Scheduling {tile}')
+        dprint(f"Scheduling {tile}")
         if tile.REDUCES:
             tile.schedule_reduction()
 
@@ -588,17 +656,17 @@ def schedule_to_workers(tile_list):
         # FE
         for i in range(len(dist)):
             if dist[i].assigned_data() == 0:
-                if not isinstance(dist[i],Collist):
-                    dist[i] = Empty(0,0,0,0)
+                if not isinstance(dist[i], Collist):
+                    dist[i] = Empty(0, 0, 0, 0)
         schedule_fe.append(tuple(dist))
         maxsnum = max([d.snum_fe() for d in dist])
         for i in range(maxsnum):
             buffer_dist = []
             for h in range(HARTS):
                 if dist[h].snum_fe() > i:
-                    buffer_dist.append(SynchBuffer(0,0,0,0))
+                    buffer_dist.append(SynchBuffer(0, 0, 0, 0))
                 else:
-                    buffer_dist.append(Empty(0,0,0,0))
+                    buffer_dist.append(Empty(0, 0, 0, 0))
             schedule_fe.append(tuple(buffer_dist))
 
         # BS
@@ -607,62 +675,64 @@ def schedule_to_workers(tile_list):
         # purge dist from empty items:
         for i in range(len(dist)):
             if dist[i].assigned_data() == 0:
-                dist[i] = Empty(0,0,0,0)
+                dist[i] = Empty(0, 0, 0, 0)
         maxsnum = max([d.snum_bs() for d in dist])
         for i in range(maxsnum):
             buffer_dist = []
             for h in range(HARTS):
                 if dist[h].snum_fe() > i:
-                    buffer_dist.append(SynchBuffer(0,0,0,0))
+                    buffer_dist.append(SynchBuffer(0, 0, 0, 0))
                 else:
-                    buffer_dist.append(Empty(0,0,0,0))
+                    buffer_dist.append(Empty(0, 0, 0, 0))
             schedule_bs.append(tuple(buffer_dist))
         # add in reverse order because we reverse later
         schedule_bs.append(tuple(dist))
 
-    # reverse 
+    # reverse
     schedule_bs.reverse()
-    return schedule_fe,schedule_bs
+    return schedule_fe, schedule_bs
 
 
-def print_schedule(schedule,s_offset=0):
-    #print('\n########## SCHEDULING ##########')
-    for synch,step in enumerate(schedule):
-        print(f'synch. step {synch+s_offset}:')
-        for hart,work in enumerate(step):
+def print_schedule(schedule, s_offset=0):
+    # print('\n########## SCHEDULING ##########')
+    for synch, step in enumerate(schedule):
+        print(f"synch. step {synch+s_offset}:")
+        for hart, work in enumerate(step):
             if work.assigned_data() == 0:
-                print(f'  H{hart} {work}: ')
+                print(f"  H{hart} {work}: ")
             else:
-                print(f'  H{hart} {work}:\t {work.assigned_data()} assigned elements')
+                print(f"  H{hart} {work}:\t {work.assigned_data()} assigned elements")
         print()
 
 
-def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
+def codegenSolver(args, schedule_fe, schedule_bs, bp_sync):
     synchsteps_fe = len(schedule_fe)
     synchsteps_bs = len(schedule_bs)
-    direc = f'{args.wd}/build/{args.test}'
+    direc = f"{args.wd}/build/{args.test}"
     if not os.path.exists(direc):
         os.makedirs(direc)
-    datafile = f'{direc}/scheduled_data.h'
-    bprint(f'\nCode generation into {datafile}.')
+    datafile = f"{direc}/scheduled_data.h"
+    bprint(f"\nCode generation into {datafile}.")
     print(f"Synchronizing write access to bp at: {bp_sync}")
 
     # define space for data that defines what kernel to call, what arguments to pass and
     #  what data to include
-    enum = [[] for i in range(HARTS+1)] # defines function call to kernel
-    argstruct = [[] for i in range(HARTS+1)] # defines passed argument in function call
-    codedata = {} # defines static data
+    enum = [[] for i in range(HARTS + 1)]  # defines function call to kernel
+    argstruct = [
+        [] for i in range(HARTS + 1)
+    ]  # defines passed argument in function call
+    codedata = {}  # defines static data
 
     def generate_enum_list(for_fe=True):
-        for s,dist in enumerate(schedule_fe if for_fe else schedule_bs):
-            assert(len(dist) == HARTS)
-            for h,d in enumerate(dist):
+        for s, dist in enumerate(schedule_fe if for_fe else schedule_bs):
+            assert len(dist) == HARTS
+            for h, d in enumerate(dist):
                 # call tiles codegen
-                (kfe,kbs),(args_fe,args_bs),dat = d.codegen(s,h)
+                (kfe, kbs), (args_fe, args_bs), dat = d.codegen(s, h)
                 if for_fe:
-                    kernel,args = kfe, args_fe
+                    kernel, args = kfe, args_fe
                 else:
-                    kernel,args = kbs, args_bs
+                    kernel, args = kbs, args_bs
                 if kernel is None:
                     continue
                 # process data
@@ -671,49 +741,48 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
                 enum[h].append(kernel.name)
                 # process function arguments
                 if args is not None:
-                    argstruct[h].append('&'+args)
+                    argstruct[h].append("&" + args)
             # all other harts simply synchronize
             enum[-1].append(Kernel.SYNCH.name)
 
     # generate data according to FE schedule
-    if args.case == 'solve' or args.case == 'lsolve':
-        print('generating schedule for FE')
+    if args.case == "solve" or args.case == "lsolve":
+        print("generating schedule for FE")
         generate_enum_list(for_fe=True)
     # process diag_inv_mult kernel
-    if args.case == 'solve':
-        print('generating schedule for inverse diagonal multiplication')
+    if args.case == "solve":
+        print("generating schedule for inverse diagonal multiplication")
         for h in range(HARTS):
             enum[h].append(Kernel.DIAG_INV_MULT.name)
         enum[-1].append(Kernel.SYNCH.name)
     # process BS
-    if args.case == 'solve' or args.case == 'ltsolve':
-        print('generating schedule for BS')
+    if args.case == "solve" or args.case == "ltsolve":
+        print("generating schedule for BS")
         generate_enum_list(for_fe=False)
 
-
     # dump data fo file
-    with open(datafile,'w') as f:
+    with open(datafile, "w") as f:
         # enumerate definition for Kernel
-        enumdef = 'enum Kernel {'
-        for k in (Kernel):
-            enumdef += f'{k.name} = {k.value}, '
-        enumdef += '};\n\n'
+        enumdef = "enum Kernel {"
+        for k in Kernel:
+            enumdef += f"{k.name} = {k.value}, "
+        enumdef += "};\n\n"
         f.write(enumdef)
 
         # dump static data
-        for k,v in codedata.items():
-            if isinstance(v,list):
-                v = list2array(v,k)
-                ndarrayToC(f,k,v,const=True)
-            elif isinstance(v,np.ndarray):
-                ndarrayToC(f,k,v,const=True)
-            elif isinstance(v,str):
-                v = v.split('=')
+        for k, v in codedata.items():
+            if isinstance(v, list):
+                v = list2array(v, k)
+                ndarrayToC(f, k, v, const=True)
+            elif isinstance(v, np.ndarray):
+                ndarrayToC(f, k, v, const=True)
+            elif isinstance(v, str):
+                v = v.split("=")
                 assert len(v) == 2
                 attr = f'__attribute__((aligned(8),section(".tcdm")))'
-                f.write(f'const {v[0]} {attr} ={v[1]}\n')
+                f.write(f"const {v[0]} {attr} ={v[1]}\n")
             else:
-                raise NotImplementedError(f'Unknown how to convert {type(v)} to code')
+                raise NotImplementedError(f"Unknown how to convert {type(v)} to code")
 
         # merge argument data
         args_coff = []
@@ -723,16 +792,16 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
             argstruct_joined.extend(v)
         args_coff.append(len(argstruct_joined))
         # dump argument data
-        name = 'argstruct_coreoffset'
+        name = "argstruct_coreoffset"
         # TODO: select base for argstruct_joined: currently is uint8_t
-        ndarrayToC(f,name,list2array(args_coff,name),const=True)
+        ndarrayToC(f, name, list2array(args_coff, name), const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
-        f.write(f'void * const argstruct_joined [] {attr} = ' + '{\n')
-        for h,l in enumerate(argstruct):
-            f.write(f'// HART {h}\n')
+        f.write(f"void * const argstruct_joined [] {attr} = " + "{\n")
+        for h, l in enumerate(argstruct):
+            f.write(f"// HART {h}\n")
             for s in l:
-                f.write(f'(void *) {s},\n')
-        f.write('};\n\n')
+                f.write(f"(void *) {s},\n")
+        f.write("};\n\n")
 
         # merge enum data
         enum_coff = []
@@ -742,65 +811,66 @@ def codegenSolver(args,schedule_fe,schedule_bs,bp_sync):
             enum_joined.extend(v)
         enum_coff.append(len(enum_joined))
         # dump enum data
-        name = 'enum_coreoffset'
+        name = "enum_coreoffset"
         # TODO: select base for enum_coreoffset: currently is uint8_t
-        ndarrayToC(f,name,list2array(enum_coff,name),const=True)
+        ndarrayToC(f, name, list2array(enum_coff, name), const=True)
         attr = f'__attribute__((aligned(4),section(".tcdm")))'
-        f.write(f'const enum Kernel enum_joined [] {attr} = ' + '{\n')
-        for h,l in enumerate(enum):
-            f.write(f'// HART {h}\n')
+        f.write(f"const enum Kernel enum_joined [] {attr} = " + "{\n")
+        for h, l in enumerate(enum):
+            f.write(f"// HART {h}\n")
             for s in l:
-                f.write(f'{s},\n')
-        f.write('};\n\n')
+                f.write(f"{s},\n")
+        f.write("};\n\n")
 
 
-def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
+def writeWorkspaceToFile(args, linsys, firstbp=0, lastbp=None, permutation=None):
     if lastbp is None:
         lastbp = linsys.n
     global Kdata
     global Ldata
     global x_gold
-    direc = f'{args.wd}/build/{args.test}'
+    direc = f"{args.wd}/build/{args.test}"
     if not os.path.exists(direc):
         os.makedirs(direc)
-    workh = f'{direc}/workspace.h'
-    workc = f'{direc}/workspace.c'
-    goldenh = f'{direc}/olden.h'
-    bprint(f'\nCreating workspace')
-    case = 'solve'
+    workh = f"{direc}/workspace.h"
+    workc = f"{direc}/workspace.c"
+    goldenh = f"{direc}/olden.h"
+    bprint(f"\nCreating workspace")
+    case = "solve"
     if args.lsolve:
-        case = 'lsolve'
+        case = "lsolve"
     elif args.ltsolve:
-        case = 'ltsolve'
-    print(f'Dumping to {workh} and {workc}.\nIncluding golden model for **{args.case}**')
+        case = "ltsolve"
+    print(
+        f"Dumping to {workh} and {workc}.\nIncluding golden model for **{args.case}**"
+    )
 
     try:
-        fh = open(workh,'w')
-        fc = open(workc,'w')
+        fh = open(workh, "w")
+        fc = open(workc, "w")
 
         # includes and defines
         if args.sssr:
-            fh.write(f'#define SSSR \n')
+            fh.write("#define SSSR \n")
         if args.parspl:
-            fh.write(f'#define PARSPL \n')
-            fh.write(f'#define PERMUTATE \n')
-            fh.write(f'#define FIRST_BP ({firstbp})\n')
-            fh.write(f'#define LAST_BP ({lastbp})\n')
+            fh.write("#define PARSPL \n")
+            fh.write("#define PERMUTATE \n")
+            fh.write("#define FIRST_BP ({firstbp})\n")
+            fh.write("#define LAST_BP ({lastbp})\n")
         elif args.solve_csc:
-            fh.write(f'#define SOLVE_CSC \n')
+            fh.write("#define SOLVE_CSC \n")
             permutation = None
         elif args.psolve_csc:
-            fh.write(f'#define PSOLVE_CSC \n')
+            fh.write("#define PSOLVE_CSC \n")
             permutation = None
         elif args.sssr_psolve_csc:
-            fh.write(f'#define SSSR_PSOLVE_CSC \n')
+            fh.write("#define SSSR_PSOLVE_CSC \n")
             permutation = None
         fc.write('#include "workspace.h"\n')
-        fh.write('#include <stdint.h>\n')
+        fh.write("#include <stdint.h>\n")
         fh.write('#include "types.h"\n\n')
-        fh.write(f'#define {args.case.upper()}\n')
-        fh.write(f'#define LINSYS_N ({linsys.n})\n')
-         
+        fh.write(f"#define {args.case.upper()}\n")
+        fh.write(f"#define LINSYS_N ({linsys.n})\n")
 
         # create golden model: M @ x_golden = bp
         # Determine M matrix depending on the verification case
@@ -812,124 +882,132 @@ def writeWorkspaceToFile(args,linsys,firstbp=0,lastbp=None,permutation=None):
             # TODO: use K directly to avoid any conversion errors
             # but since we still have LDLT as input data
             # and do not do the decomposition ourself it is safer to do this instead
-            #M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
+            # M = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(linsys.n,linsys.n))
             M = Kdata
 
         if args.debug and linsys.n < 20:
-            print('Matrix for golden model creation:')
+            print("Matrix for golden model creation:")
             print(M.toarray())
 
-
-
-        fc.write(f'// verification of {args.case}\n')
+        fc.write(f"// verification of {args.case}\n")
         # b
         b = M @ x_gold
-        ndarrayToCH(fc,fh,'b',b)
+        ndarrayToCH(fc, fh, "b", b)
         # golden
-        ndarrayToCH(fc,fh,'XGOLD',x_gold,section='')
-        ndarrayToCH(fc,fh,'XGOLD_INV',1/x_gold,section='')
+        ndarrayToCH(fc, fh, "XGOLD", x_gold, section="")
+        ndarrayToCH(fc, fh, "XGOLD_INV", 1 / x_gold, section="")
 
         # CSC format data
         if args.solve_csc or args.psolve_csc:
-            Lp = list2array(linsys.Lp,'Lp',base=32)
-            Li = list2array(linsys.Li,'Li',base=16)
-            Lx = np.array(linsys.Lx,dtype=np.float64)
-            ndarrayToCH(fc,fh,'Lp',Lp)
-            ndarrayToCH(fc,fh,'Li',Li)
-            ndarrayToCH(fc,fh,'Lx',Lx)
+            Lp = list2array(linsys.Lp, "Lp", base=32)
+            Li = list2array(linsys.Li, "Li", base=16)
+            Lx = np.array(linsys.Lx, dtype=np.float64)
+            ndarrayToCH(fc, fh, "Lp", Lp)
+            ndarrayToCH(fc, fh, "Li", Li)
+            ndarrayToCH(fc, fh, "Lx", Lx)
         elif args.sssr_psolve_csc:
-            lldd = workload_distribute_L(linsys.Lp,linsys.Li,linsys.Lx)
-            (LpStart,LpLen,LpLenSum,LxNew,LiNew,LiNewR) = lldd
-            ndarrayToCH(fc,fh,'LpStart',LpStart)
-            ndarrayToCH(fc,fh,'LpLen',LpLen)
-            ndarrayToCH(fc,fh,'LpLenSum',LpLenSum)
-            ndarrayToCH(fc,fh,'LxNew',LxNew)
-            ndarrayToCH(fc,fh,'LiNew',LiNew)
-            ndarrayToCH(fc,fh,'LiNewR',LiNewR)
+            lldd = workload_distribute_L(linsys.Lp, linsys.Li, linsys.Lx)
+            (LpStart, LpLen, LpLenSum, LxNew, LiNew, LiNewR) = lldd
+            ndarrayToCH(fc, fh, "LpStart", LpStart)
+            ndarrayToCH(fc, fh, "LpLen", LpLen)
+            ndarrayToCH(fc, fh, "LpLenSum", LpLenSum)
+            ndarrayToCH(fc, fh, "LxNew", LxNew)
+            ndarrayToCH(fc, fh, "LiNew", LiNew)
+            ndarrayToCH(fc, fh, "LiNewR", LiNewR)
 
-        Dinv = 1/np.array(linsys.D)
+        Dinv = 1 / np.array(linsys.D)
         # Perm
         if args.sssr:
             # originally only used for permutation but now also used for scheduling
             #  any vector operation (of length total) with SSSRs.
-            def lenstart_schedule(total,name,lenmo=True):
+            def lenstart_schedule(total, name, lenmo=True):
                 len_perm = []
                 start_perm = []
                 for h in range(HARTS):
                     l = (HARTS - 1 + total - h) // HARTS
-                    if lenmo: #if length minus one
-                        start_perm.append(sum(len_perm)+h)
-                        len_perm.append(l-1) # frep/sssr length uses length - 1
+                    if lenmo:  # if length minus one
+                        start_perm.append(sum(len_perm) + h)
+                        len_perm.append(l - 1)  # frep/sssr length uses length - 1
                     else:
                         start_perm.append(sum(len_perm))
                         len_perm.append(l)
-                ndarrayToCH(fc,fh,f'start_{name}',list2array(start_perm,f'start_{name}',base=32))
-                ndarrayToCH(fc,fh,f'len_{name}',list2array(len_perm,f'len_{name}',base=32))
-            lenstart_schedule(linsys.n,'perm')
+                ndarrayToCH(
+                    fc,
+                    fh,
+                    f"start_{name}",
+                    list2array(start_perm, f"start_{name}", base=32),
+                )
+                ndarrayToCH(
+                    fc, fh, f"len_{name}", list2array(len_perm, f"len_{name}", base=32)
+                )
+
+            lenstart_schedule(linsys.n, "perm")
         if permutation is not None:
             perm = np.array(permutation)
-            ndarrayToCH(fc,fh,'Perm',perm)
-            ndarrayToCH(fc,fh,'PermT',np.argsort(perm))
+            ndarrayToCH(fc, fh, "Perm", perm)
+            ndarrayToCH(fc, fh, "PermT", np.argsort(perm))
             # bp, bp_copy
             RANGE = 5
-            exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+            exponent = np.random.random_sample(linsys.n) * (2 * RANGE) - RANGE
             bp = np.exp(exponent)
-            #bp = b[permutation]
-            ndarrayToCH(fc,fh,'bp',bp)
+            # bp = b[permutation]
+            ndarrayToCH(fc, fh, "bp", bp)
             # Dinv
-            #permT = np.argsort(perm)
+            # permT = np.argsort(perm)
             Dinv = Dinv[perm]
-            ndarrayToCH(fc,fh,'Dinv',Dinv)
+            ndarrayToCH(fc, fh, "Dinv", Dinv)
         else:
             # Dinv
-            ndarrayToCH(fc,fh,'Dinv',Dinv)
+            ndarrayToCH(fc, fh, "Dinv", Dinv)
         # solution vector x
         # TODO: setting to random is only used for verification / testing
         RANGE = 5
-        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        exponent = np.random.random_sample(linsys.n) * (2 * RANGE) - RANGE
         x = np.exp(exponent)
-        ndarrayToCH(fc,fh,'x',x)
-        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        ndarrayToCH(fc, fh, "x", x)
+        exponent = np.random.random_sample(linsys.n) * (2 * RANGE) - RANGE
         bp_cp = np.exp(exponent)
-        ndarrayToCH(fc,fh,'bp_cp',bp_cp)
+        ndarrayToCH(fc, fh, "bp_cp", bp_cp)
         # temporary space for intermediate results before reduction
-        bp_tmp = np.zeros(HARTS*(lastbp-firstbp))
-        ndarrayToCH(fc,fh,f'bp_tmp',bp_tmp)
+        bp_tmp = np.zeros(HARTS * (lastbp - firstbp))
+        ndarrayToCH(fc, fh, "bp_tmp", bp_tmp)
     finally:
         fh.close()
         fc.close()
 
-def interactive_plot_schedule(L,schedule,cuts):
-    (fig,ax,sq_dict) = L.plot(uselx=False)
+
+def interactive_plot_schedule(L, schedule, cuts):
+    (fig, ax, sq_dict) = L.plot(uselx=False)
 
     # legend
     elems = []
-    for h,c in zip(range(HARTS),color_palette):
-        patch = Patch(facecolor=c, edgecolor=None, label=f'hart {h}')
+    for h, c in zip(range(HARTS), color_palette):
+        patch = Patch(facecolor=c, edgecolor=None, label=f"hart {h}")
         elems.append(patch)
-    ax.legend(handles=elems, loc='upper right')
+    ax.legend(handles=elems, loc="upper right")
 
     # Fade color
     def fade_all(sq_dict):
-        grey = (0.7,0.7,0.7)
+        grey = (0.7, 0.7, 0.7)
         for r in sq_dict:
             for v in sq_dict[r].values():
                 v.set_color(grey)
+
     # Color according to schedule, run loop interactively
     fade_all(sq_dict)
     plt.pause(0.001)
     patchlist = []
-    prompt = escape.BOLD + f'Select Schedule from 0..{len(schedule)-1}: '
+    prompt = escape.BOLD + f"Select Schedule from 0..{len(schedule)-1}: "
     prompt += escape.END
-    while(True):
-        try: # get user input
+    while True:
+        try:  # get user input
             selection = int(input(prompt))
             if selection >= len(schedule):
                 raise ValueError()
         except EOFError as e:
             break
         except Exception as e:
-            wprint(f'Exception: default to schedule 0')
+            wprint("Exception: default to schedule 0")
             selection = 0
         tmp_schedule = [schedule[selection]]
         # clean up plot
@@ -939,34 +1017,37 @@ def interactive_plot_schedule(L,schedule,cuts):
         plotobjs = []
         fade_all(sq_dict)
         # recolour
-        for synch_num,work in zip([selection],tmp_schedule):
-            for h,tile in enumerate(work):
+        for synch_num, work in zip([selection], tmp_schedule):
+            for h, tile in enumerate(work):
                 if tile is None:
                     pass
                 else:
-                    print(f' H{h} {tile}')
-                    patches = tile.color_dict(sq_dict,color_palette[h])
+                    print(f" H{h} {tile}")
+                    patches = tile.color_dict(sq_dict, color_palette[h])
                     patchlist.extend(patches)
-                    if h == 0: #TODO: different harts could be allocated to different kernels!
-                        rect = tile.show_on_plot(ax,number=synch_num)
+                    if (
+                        h == 0
+                    ):  # TODO: different harts could be allocated to different kernels!
+                        rect = tile.show_on_plot(ax, number=synch_num)
                         plotobjs.extend(rect)
         plt.pause(0.001)
 
-def plot_schedule(L,schedule,cuts,color_harts=True):
-    (fig,ax,sq_dict) = L.plot(uselx=False)
+
+def plot_schedule(L, schedule, cuts, color_harts=True):
+    (fig, ax, sq_dict) = L.plot(uselx=False)
 
     # legend
     if color_harts:
         elems = []
-        for h,c in zip(range(HARTS),color_palette):
-            patch = Patch(facecolor=c, edgecolor=None, label=f'hart {h}')
+        for h, c in zip(range(HARTS), color_palette):
+            patch = Patch(facecolor=c, edgecolor=None, label=f"hart {h}")
             elems.append(patch)
-        ax.legend(handles=elems, loc='upper right')
+        ax.legend(handles=elems, loc="upper right")
 
     # Color according to schedule
     patchlist = []
-    for synch_num,work in enumerate(schedule):
-        for h,tile in enumerate(work):
+    for synch_num, work in enumerate(schedule):
+        for h, tile in enumerate(work):
             if tile is None:
                 pass
             else:
@@ -974,102 +1055,109 @@ def plot_schedule(L,schedule,cuts,color_harts=True):
                 if not color_harts:
                     color_value = GRAY_COLOR
                 # let the tile color the patches
-                patches = tile.color_dict(sq_dict,color_value)
+                patches = tile.color_dict(sq_dict, color_value)
                 # add all fillins if introduced by the tile
                 for p in patches:
                     patchlist.append(ax.add_patch(p))
-                if h == 0: #TODO: different harts could be allocated to different kernels!
-                    tile.show_on_plot(ax,number=synch_num)
+                if (
+                    h == 0
+                ):  # TODO: different harts could be allocated to different kernels!
+                    tile.show_on_plot(ax, number=synch_num)
     plt.show()
 
 
-def read_cuts(problem,wd):
-    ''' Read new-line seperated list from file '''
-    cutfile = f'{wd}/src/{problem}.cut'
+def read_cuts(problem, wd):
+    """Read new-line seperated list from file"""
+    cutfile = f"{wd}/src/{problem}.cut"
     cuts = []
-    with open(cutfile,'r') as f:
+    with open(cutfile, "r") as f:
         for l in f.readlines():
             cuts.append(int(l))
     return cuts
 
-def cut2lines(cuts,graph_part_cuts):
+
+def cut2lines(cuts, graph_part_cuts):
     # convert cut array to lines (points in x,y)
-    xr = []; yr = []
-    xg = []; yg = []
+    xr = []
+    yr = []
+    xg = []
+    yg = []
     n = cuts[-1]
     s = n
     for s2 in cuts[1:-1]:
-        x,y = (xr,yr)
+        x, y = (xr, yr)
         if graph_part_cuts != None and s2 in graph_part_cuts:
-            x,y = (xg,yg)
-        #x.extend([0.5,s2+0.5,s2+0.5,None])
-        #y.extend([s2+0.5,s2+0.5,s+0.5,None])
-        x.extend([-0.5,s2-0.5,s2-0.5,None])
-        y.extend([s2-0.5,s2-0.5,n-0.5,None])
+            x, y = (xg, yg)
+        # x.extend([0.5,s2+0.5,s2+0.5,None])
+        # y.extend([s2+0.5,s2+0.5,s+0.5,None])
+        x.extend([-0.5, s2 - 0.5, s2 - 0.5, None])
+        y.extend([s2 - 0.5, s2 - 0.5, n - 0.5, None])
         s = s2
-    return (xr,yr,xg,yg)
+    return (xr, yr, xg, yg)
 
-def plot_cuts(problem,ax,n,wd,cuts=None,graph_part_cuts=None):
+
+def plot_cuts(problem, ax, n, wd, cuts=None, graph_part_cuts=None):
     # read in cuts array
     if cuts is None:
-        cuts = read_cuts(problem,wd)
-    verify_cuts(cuts,n) # verify + sort
+        cuts = read_cuts(problem, wd)
+    verify_cuts(cuts, n)  # verify + sort
     print(f"redrawing cuts at: {cuts}")
-    (xr,yr,xg,yg) = cut2lines(cuts,graph_part_cuts)
-    lines = ax.plot(xr,yr,color='r',linewidth=1.5)
-    lines2 = ax.plot(xg,yg,color='c',linewidth=1.5)
+    (xr, yr, xg, yg) = cut2lines(cuts, graph_part_cuts)
+    lines = ax.plot(xr, yr, color="r", linewidth=1.5)
+    lines2 = ax.plot(xg, yg, color="c", linewidth=1.5)
     lines.extend(lines2)
     return lines
 
-def live_cuts(problem,L,wd,uselx=True,cuts=None):
-    ''' Live cut matrix visually.'''
+
+def live_cuts(problem, L, wd, uselx=True, cuts=None):
+    """Live cut matrix visually."""
     # cuts
-    cutfile = f'src/{problem}.cut'
-    print(escape.BOLD, f'User should edit cutfile {cutfile}.',escape.END)
+    cutfile = f"src/{problem}.cut"
+    print(escape.BOLD, f"User should edit cutfile {cutfile}.", escape.END)
     # matrix
-    (fig,ax,sq_dict) = L.plot(diag=False,uselx=uselx)
+    (fig, ax, sq_dict) = L.plot(diag=False, uselx=uselx)
     plt.pause(0.001)
     lines = []
     # update cuts from file livecuts
-    while(True):
+    while True:
         # update the artist data
         for l in lines:
             l.remove()
         # read in cuts array
-        lines = plot_cuts(problem,ax,L.n,wd,cuts=cuts)
+        lines = plot_cuts(problem, ax, L.n, wd, cuts=cuts)
         # redraw
         plt.pause(2)
 
 
 def row_col_occupation(L):
-    row_occ = np.zeros(L.n,dtype=int)
-    col_occ = np.zeros(L.n,dtype=int)
-    Lp,Li = (L.Lp,L.Li)
+    row_occ = np.zeros(L.n, dtype=int)
+    col_occ = np.zeros(L.n, dtype=int)
+    Lp, Li = (L.Lp, L.Li)
     for col in range(L.n):
-        for k in range(Lp[col],Lp[col+1]):
+        for k in range(Lp[col], Lp[col + 1]):
             row = Li[k]
             row_occ[row] += 1
             col_occ[col] += 1
-    return (row_occ,col_occ)
-    
+    return (row_occ, col_occ)
+
 
 def compute_level(L):
-    '''
+    """
     Compute levels from level scheduling of the L matrix.
-    
+
     Parameters:
     L (Csc): Lower triangular matrix in Csc format and zero diagonal.
 
     Returns:
     np.ndarray: Vector of levels.
     dict: Bining dictionary that containts how many columns are in each level (starting with level 0).
-    '''
-    Lp,Li = (L.Lp,L.Li)
+    """
+    Lp, Li = (L.Lp, L.Li)
     # compute levels
-    level = np.zeros(L.n,dtype=int)
+    level = np.zeros(L.n, dtype=int)
     for col in range(L.n):
-        for k in range(Lp[col],Lp[col+1]):
-            level[Li[k]] = max(level[Li[k]],1+level[col])
+        for k in range(Lp[col], Lp[col + 1]):
+            level[Li[k]] = max(level[Li[k]], 1 + level[col])
     # bin levels
     bins = {}
     for i in level:
@@ -1077,35 +1165,36 @@ def compute_level(L):
             bins[i] = 1
         else:
             bins[i] += 1
-    return (level,bins)
+    return (level, bins)
+
 
 def heuristic_level_thr(L):
-    '''
+    """
     Heuristica computation of a threshold for partial level scheduling.
     Columns get only partially level sched if they contain at least 2.5% of the overall amount of columns (matrix dimension).
-    
-    
+
+
     Parameters:
     L (Csc): Lower triangular matrix in Csc format and zero diagonal.
 
     Returns:
     level_thr: So that levels 0 to level level_thr contain at least L.n*0.025 many columns.
-    '''
-    THR = 2.5/100
-    level,bins = compute_level(L)
+    """
+    THR = 2.5 / 100
+    level, bins = compute_level(L)
     level_thr = 0
-    for l,num in bins.items():
-        level_thr = l # default return last
-        if (num < L.n*THR):
-            level_thr = l-1
+    for l, num in bins.items():
+        level_thr = l  # default return last
+        if num < L.n * THR:
+            level_thr = l - 1
             break
     return level_thr
 
 
-def level2permutation(level,thr=None):
-    '''
+def level2permutation(level, thr=None):
+    """
     Create reordering permutation matrix such that levels are sorted.
-    
+
     Parameters:
     level (np.ndarray): Vector of levels.
     thr (int): Optional threshold. If provided only levels up to a threshold will be ordered.
@@ -1114,35 +1203,36 @@ def level2permutation(level,thr=None):
     (perm,permT)
     perm (np.ndarray): Permutation vector representing the column permutation.
     permT (np.ndarray): Permutation vector representing the row permutation.
-    '''
+    """
     n = len(level)
     if thr is None:
-        thr = n+1
+        thr = n + 1
 
-    #perm = np.argsort(level) # level[perm] will be a sorted array
+    # perm = np.argsort(level) # level[perm] will be a sorted array
     # argsort works but shuffels the currently allready quite good sorting.
-    
+
     # Sort by level but keep the columns on the same level in the same order.
     # swap sort is O(n^2) but keeps original order.
     level = level.copy()
     perm = [x for x in range(n)]
-    for i in range(1,n):
-        for j in range(1,n-1):
+    for i in range(1, n):
+        for j in range(1, n - 1):
             # check and swap larger value to higher indices
-            if level[j] > level[j+1] and level[j+1] <= thr:
-                level[j], level[j+1] = level[j+1], level[j]
-                perm[j], perm[j+1] = perm[j+1], perm[j]
+            if level[j] > level[j + 1] and level[j + 1] <= thr:
+                level[j], level[j + 1] = level[j + 1], level[j]
+                perm[j], perm[j + 1] = perm[j + 1], perm[j]
         pass
 
     # compute permT that is used to swap column indices.
     #  if perm is the column ordering than permT is the corresponding row ordering.
     permT = np.argsort(perm)
-    return (perm,permT)
+    return (perm, permT)
 
-def permute_csc(L,perm,permT):
-    '''
+
+def permute_csc(L, perm, permT):
+    """
     Permute csc L matrix according to permutation vector.
-    
+
     Parameters:
     L (Triag): Lower triangular matrix in Csc format and zero diagonal.
     perm (np.ndarray): Permutation vector representing the column permutation.
@@ -1150,51 +1240,52 @@ def permute_csc(L,perm,permT):
 
     Returns:
     Triag: Reordered L matrix.
-    '''
-    assert(L.n == len(perm))
+    """
+    assert L.n == len(perm)
 
     # empty data structure
-    Lp,Li,Lx = (L.Lp,L.Li,L.Lx)
-    PLp = np.empty(len(Lp),dtype=int)
-    PLi = np.empty(len(Li),dtype=int)
+    Lp, Li, Lx = (L.Lp, L.Li, L.Lx)
+    PLp = np.empty(len(Lp), dtype=int)
+    PLi = np.empty(len(Li), dtype=int)
     PLx = np.empty(len(Lx))
 
     # reorder columns and rows in one go
     # compute PLP^T
     progress = 0
     PLp[0] = 0
-    for i,col in enumerate(perm):
-        for elem in range(Lp[col],Lp[col+1]):
+    for i, col in enumerate(perm):
+        for elem in range(Lp[col], Lp[col + 1]):
             PLi[progress] = permT[Li[elem]]
             PLx[progress] = Lx[elem]
             progress += 1
-        PLp[i+1] = progress
-    assert(progress == len(Li))
-    PL = Triag(PLp,PLi,PLx,L.n,'Permuted L')
+        PLp[i + 1] = progress
+    assert progress == len(Li)
+    PL = Triag(PLp, PLi, PLx, L.n, "Permuted L")
     return PL
 
+
 def level_schedule(L):
-    '''
+    """
     Compute and permute L according to level scheduling.
-    
+
     Parameters:
     L (Csc): Lower triangular matrix in Csc format and zero diagonal.
 
     Returns:
     Csc: Reordered L matrix.
     perm (np.ndarray): Permutation vector.
-    '''
-    level,bins = compute_level(L)
-    perm,permT = level2permutation(level)
-    PL = permute_csc(L,perm,permT)
-    return (PL,perm)
+    """
+    level, bins = compute_level(L)
+    perm, permT = level2permutation(level)
+    PL = permute_csc(L, perm, permT)
+    return (PL, perm)
 
 
-def incomplete_level_schedule(L,threshold, intra_level_reorder = False):
-    '''
+def incomplete_level_schedule(L, threshold, intra_level_reorder=False):
+    """
     Compute and permute L according to level scheduling.
     However only schedule the levels up until a threshold.
-    
+
     Parameters:
     L (Csc): Lower triangular matrix in Csc format and zero diagonal.
     threshold (int): Threshold above which we do not permute anymore.
@@ -1203,24 +1294,24 @@ def incomplete_level_schedule(L,threshold, intra_level_reorder = False):
     Returns:
     Csc: Reordered L matrix.
     perm (np.ndarray): Permutation vector.
-    '''
-    level,bins = compute_level(L)
-    perm,permT = level2permutation(level,threshold)
+    """
+    level, bins = compute_level(L)
+    perm, permT = level2permutation(level, threshold)
     perm = np.array(perm)
-    PL = permute_csc(L,perm,permT)
+    PL = permute_csc(L, perm, permT)
 
     if intra_level_reorder:
         _, col_occ = row_col_occupation(PL)
-        a = 0 # start
+        a = 0  # start
         for level in range(threshold):
-            z = a + bins[level] # end of current level
+            z = a + bins[level]  # end of current level
             level_occ = col_occ[a:z]
             sorting = np.argsort(level_occ)
             perm[a:z] = perm[a:z][sorting]
             a = z
         permT = np.argsort(perm)
-        PL = permute_csc(L,perm,permT)
-    return (PL,perm)
+        PL = permute_csc(L, perm, permT)
+    return (PL, perm)
 
 
 def main(args):
@@ -1233,81 +1324,89 @@ def main(args):
         general.DEBUG = True
         plt.ion()
 
-    args.parspl = True # default
+    args.parspl = True  # default
     if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
         args.parspl = False
 
-    case = 'solve'
+    case = "solve"
     if args.lsolve:
-        case = 'lsolve'
+        case = "lsolve"
     elif args.ltsolve:
-        case = 'ltsolve'
+        case = "ltsolve"
     elif args.solve:
-        case = 'solve'
-    if case != 'solve' and not args.parspl and not args.sssr_psolve_csc:
-        raise NotImplementedError('All other solving methods other than parspl and sssr_psolve_csc do not support running FE or BS exclusively. (simple to add though.')
+        case = "solve"
+    if case != "solve" and not args.parspl and not args.sssr_psolve_csc:
+        raise NotImplementedError(
+            "All other solving methods other than parspl and sssr_psolve_csc do not support running FE or BS exclusively. (simple to add though."
+        )
     args.case = case
 
     if args.sssr_psolve_csc:
         args.sssr = True
 
-
-    filename = f'{args.wd}/src/{args.test}.json'
-    cutfile = f'{args.wd}/src/{args.test}.cut'
+    filename = f"{args.wd}/src/{args.test}.json"
+    cutfile = f"{args.wd}/src/{args.test}.cut"
     linsys = general.loadDotDict(filename)
-    L = Triag(linsys.Lp,linsys.Li,linsys.Lx,linsys.n,f'L from {filename}')
-    perm = None # permutation matrix
+    L = Triag(linsys.Lp, linsys.Li, linsys.Lx, linsys.n, f"L from {filename}")
+    perm = None  # permutation matrix
 
     ##### Give some metrics about input data:
-    #if args.lsolve or args.ltsolve or args.solve:
-    Ldata = spa.csc_matrix((L.Lx,L.Li,L.Lp),shape=(L.n,L.n)) + spa.eye(L.n)
-    Kdata = spa.csc_matrix((linsys.Kx,linsys.Ki,linsys.Kp),shape=(L.n,L.n))
+    # if args.lsolve or args.ltsolve or args.solve:
+    Ldata = spa.csc_matrix((L.Lx, L.Li, L.Lp), shape=(L.n, L.n)) + spa.eye(L.n)
+    Kdata = spa.csc_matrix((linsys.Kx, linsys.Ki, linsys.Kp), shape=(L.n, L.n))
     if args.numerical_analysis:
-        bprint('Statistics of Input Data')
+        bprint("Statistics of Input Data")
 
         # condition number for numerical stability analysis
-        for mat,nam in [(Ldata,"Ldata"),(Kdata,"Kdata")]:
-            k = min(6,min(mat.shape)-1)
-            #try:
+        for mat, nam in [(Ldata, "Ldata"), (Kdata, "Kdata")]:
+            k = min(6, min(mat.shape) - 1)
+            # try:
             #    sv_max = spa.linalg.svds(mat, return_singular_vectors=False, k=k, which='LM')
             #    sv_min = spa.linalg.svds(mat, return_singular_vectors=False, k=k, which='SM')
             #    sv_min = min(sv_min)
             #    sv_max = max(sv_min)
             #    cond = sv_max/sv_min
             #    print(f'Conditional Number of {nam} = {cond:.1f}')
-            #except Exception as e:
+            # except Exception as e:
             cond = np.linalg.cond(mat.todense())
-            print(f'Conditional Number of {nam} = {cond:.1f}')
+            print(f"Conditional Number of {nam} = {cond:.1f}")
 
     # randomly sample from 1e-{RANGE} to 1e{RANGE}
     if DEBUG:
         x_gold = np.ones(linsys.n)
     else:
         RANGE = 5
-        exponent = np.random.random_sample(linsys.n)*(2*RANGE)-RANGE
+        exponent = np.random.random_sample(linsys.n) * (2 * RANGE) - RANGE
         x_gold = np.exp(exponent)
         if args.numerical_analysis:
-            print(f'Norm of x_gold = {np.linalg.norm(x_gold):.2e}')
+            print(f"Norm of x_gold = {np.linalg.norm(x_gold):.2e}")
 
     # information about performance of Lsolve, Ltsolve and solve
     if args.numerical_analysis:
-        for mat,nam in reversed([(Ldata,"Ldata"),(Ldata.transpose(),"Ldata^T"),(Kdata,"Kdata")]):
+        for mat, nam in reversed(
+            [(Ldata, "Ldata"), (Ldata.transpose(), "Ldata^T"), (Kdata, "Kdata")]
+        ):
             # generate data
-            print(f'Evaluating spa.linalg.spsolve with {nam}:')
-            b_rhs = mat@x_gold
-            print(f'\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}')
-            x_sol = spa.linalg.spsolve(mat,b_rhs)
-            print(f'\tMaximum absolute error:\t\t max|g-x| = {np.max(np.abs(x_gold-x_sol)):.2e}')
-            print(f'\tMaximum relative error:\t\t max|g-x|/|g|= {np.max(np.abs(x_gold-x_sol)/np.abs(x_gold)):.2e}')
+            print(f"Evaluating spa.linalg.spsolve with {nam}:")
+            b_rhs = mat @ x_gold
+            print(
+                f"\tNorm of right hand side vector:\t |b| = {np.linalg.norm(b_rhs):.2e}"
+            )
+            x_sol = spa.linalg.spsolve(mat, b_rhs)
+            print(
+                f"\tMaximum absolute error:\t\t max|g-x| = {np.max(np.abs(x_gold-x_sol)):.2e}"
+            )
+            print(
+                f"\tMaximum relative error:\t\t max|g-x|/|g|= {np.max(np.abs(x_gold-x_sol)/np.abs(x_gold)):.2e}"
+            )
             # compute errors
-            relerr = np.linalg.norm(x_gold-x_sol)/np.linalg.norm(x_sol)
-            print(f'\tRelative error norm:\t\t |gold-x|/|gold|= {relerr:.2e}')
-            residual = b_rhs - mat@x_sol
-            relerr = np.linalg.norm(residual)/np.linalg.norm(b_rhs)
+            relerr = np.linalg.norm(x_gold - x_sol) / np.linalg.norm(x_sol)
+            print(f"\tRelative error norm:\t\t |gold-x|/|gold|= {relerr:.2e}")
+            residual = b_rhs - mat @ x_sol
+            relerr = np.linalg.norm(residual) / np.linalg.norm(b_rhs)
             relres = 0
-            print(f'\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}')
+            print(f"\tRelative residual error norm:\t |b-Ax|/|b| = {relres:.2e}")
             print()
-
 
     #####  Do user requested exploration #####
     if args.gray_plot:
@@ -1315,20 +1414,22 @@ def main(args):
 
     if args.invert:
         # compute inverse of LDL.T = A
-        Lmat= spa.csc_matrix((L.Lx,L.Li,L.Lp)) + spa.eye(L.n)
-        Linv = spa.linalg.spsolve(Lmat,np.eye(L.n))
+        Lmat = spa.csc_matrix((L.Lx, L.Li, L.Lp)) + spa.eye(L.n)
+        Linv = spa.linalg.spsolve(Lmat, np.eye(L.n))
         thr = 1e-15
         mask = np.abs(Linv) < thr
         Linv[mask] = 0.0
-        wprint('Masking Linv. Absolute values below {thr} are set to 0. {np.sum(mask)} are affected.')
+        wprint(
+            "Masking Linv. Absolute values below {thr} are set to 0. {np.sum(mask)} are affected."
+        )
         Linv = spa.csc_matrix(Linv) - spa.eye(L.n)
         Lp = Linv.indptr
         Li = Linv.indices
         Lx = Linv.data
-        Linv = Triag(Lp,Li,Lx,L.n,name='L inverted')
-        print(f'nnz(L) = {L.nnz()}, nnz(L^-1) = {Linv.nnz()}')
-        wprint('Continuing with Linv as L.')
-        wprint('Expect numerical artifacts!')
+        Linv = Triag(Lp, Li, Lx, L.n, name="L inverted")
+        print(f"nnz(L) = {L.nnz()}, nnz(L^-1) = {Linv.nnz()}")
+        wprint("Continuing with Linv as L.")
+        wprint("Expect numerical artifacts!")
         L = Linv
         linsys.D = None
         linsys.Lp = Lp
@@ -1337,12 +1438,12 @@ def main(args):
 
     if args.level:
         bprint("\nComputing (dependency) levels of L matrix:")
-        levels,bins = compute_level(linsys)
+        levels, bins = compute_level(linsys)
         # bin levels and print bins as well as there size.
-        bprint(' Level\t Columns:')
+        bprint(" Level\t Columns:")
         for i in range(len(bins)):
-            print(f'level {i:>3}: {bins[i]:>3}\t',end='')
-            if (i+1) % 5 == 0:
+            print(f"level {i:>3}: {bins[i]:>3}\t", end="")
+            if (i + 1) % 5 == 0:
                 print()
         print()
 
@@ -1358,63 +1459,70 @@ def main(args):
         bprint(f"\nLevel schedule only levels 0 to {level_thr} by AUTOMATIC HEURISTIC.")
 
     if level_thr is not None:
-        PL,perm = incomplete_level_schedule(linsys,level_thr, intra_level_reorder=args.intra_level_reorder)
+        PL, perm = incomplete_level_schedule(
+            linsys, level_thr, intra_level_reorder=args.intra_level_reorder
+        )
     elif args.level_schedule:
         bprint("\nLevel schedule and permute L matrix:")
-        PL,perm = level_schedule(linsys)
+        PL, perm = level_schedule(linsys)
 
     if PL is not None:
-        print('Working with permuted L matrix from now on. Setting L to PL.')
+        print("Working with permuted L matrix from now on. Setting L to PL.")
         L = PL
 
     # Read Cutfile
     # TODO: restructure!
     cuts = None
     graph_part_cuts = None
+    firstbp = None
+    lastbp = None
     if args.live_cuts:
-        live_cuts(args.test,L,args.wd,uselx=not args.gray_plot)
+        live_cuts(args.test, L, args.wd, uselx=not args.gray_plot)
     if args.use_cutfile or args.live_cuts:
-        assert(os.path.exists(cutfile))
-        cuts = read_cuts(args.test,args.wd)
-        bprint(f'\nMANUALLY CUT from file at: ',*cuts)
+        assert os.path.exists(cutfile)
+        cuts = read_cuts(args.test, args.wd)
+        bprint("\nMANUALLY CUT from file at: ", *cuts)
     else:
         if args.level_schedule:
             cuts = [0]
-            levels,bins = compute_level(L)
+            levels, bins = compute_level(L)
             for l in range(len(bins)):
                 cuts.append(cuts[-1] + bins[l])
             cuts.append(L.n)
-            bprint(f'\nCutting based on level scheduling at: ',*cuts)
+            bprint("\nCutting based on level scheduling at: ", *cuts)
         else:
             # Use the naturally occuring cuts based on partial level scheduling
             cuts = [0]
             if level_thr is not None:
-                levels,bins = compute_level(L)
-                for l in range(level_thr+1):
+                levels, bins = compute_level(L)
+                for l in range(level_thr + 1):
                     cuts.append(cuts[-1] + bins[l])
-                bprint(f'\nCuts based on partial level scheduling: ',*cuts)
+                bprint("\nCuts based on partial level scheduling: ", *cuts)
             if args.heur_graph_cut or args.alap:
                 # heuristically compute cuts based on recursive graph partitioning
-                graph_part_cuts = find_optimal_cuts(L,cuts[-1],L.n)
-                bprint(f'\nCuts based on heuristic scheduling: ',*graph_part_cuts)
+                graph_part_cuts = find_optimal_cuts(L, cuts[-1], L.n)
+                bprint("\nCuts based on heuristic scheduling: ", *graph_part_cuts)
                 # heuristically compute cuts based on recursive graph partitioning
                 cuts.extend(graph_part_cuts)
-                bprint(f'\nCUTTING based on partial level scheduling and HEURISTIC graph partitioning at : ',*cuts)
+                bprint(
+                    "\nCUTTING based on partial level scheduling and HEURISTIC graph partitioning at : ",
+                    *cuts,
+                )
     if cuts[-1] != L.n:
         cuts.append(L.n)
 
     if args.occupation:
-        bprint('\nCalculate row and column occupation:')
-        (row_occ,col_occ) = row_col_occupation(L)
-        for vec,name in zip([row_occ,col_occ],['row','col']):
-            bprint(f' {name}\t occupation:',end=None)
+        bprint("\nCalculate row and column occupation:")
+        (row_occ, col_occ) = row_col_occupation(L)
+        for vec, name in zip([row_occ, col_occ], ["row", "col"]):
+            bprint(f" {name}\t occupation:", end=None)
             t = 0
             for i in range(len(vec)):
                 cnt = vec[i]
                 if cnt != 0:
-                    print(f'{name} {i:>3}: {cnt:>3}\t',end='')
+                    print(f"{name} {i:>3}: {cnt:>3}\t", end="")
                     t += 1
-                if (t+1) % 10 == 0:
+                if (t + 1) % 10 == 0:
                     t = 0
                     print()
             print()
@@ -1422,27 +1530,29 @@ def main(args):
     if args.schedule or args.codegen:
         if args.parspl:
             print("L matrix to cut & schedule:", L)
-            tiles = tile_L(L,cuts) # structured tiles
+            tiles = tile_L(L, cuts)  # structured tiles
             assign_kernel_to_tile(tiles)
-            tile_list,firstbp,lastbp = optimize_tiles(tiles,linsys.n,args) #unstructure tiles
-            bprint(f'\nScheduling to {len(tile_list)} tiling steps.')
-            schedule_fe,schedule_bs = schedule_to_workers(tile_list)
+            tile_list, firstbp, lastbp = optimize_tiles(
+                tiles, linsys.n, args
+            )  # unstructure tiles
+            bprint(f"\nScheduling to {len(tile_list)} tiling steps.")
+            schedule_fe, schedule_bs = schedule_to_workers(tile_list)
             if args.schedule:
-                print('\n## Forward Elimination ##')
+                print("\n## Forward Elimination ##")
                 print_schedule(schedule_fe)
                 s_offset = len(schedule_fe)
-                print('\n## Dinv vector-vector scaling ##')
-                print(f'synch. step {s_offset}:')
-                print('\n## Backward Substitution ##')
-                print_schedule(schedule_bs,s_offset=s_offset+1)
+                print("\n## Dinv vector-vector scaling ##")
+                print(f"synch. step {s_offset}:")
+                print("\n## Backward Substitution ##")
+                print_schedule(schedule_bs, s_offset=s_offset + 1)
             if args.interactive_schedule:
-                interactive_plot_schedule(L,schedule_fe,cuts)
+                interactive_plot_schedule(L, schedule_fe, cuts)
             elif args.plot:
-                plot_schedule(L,schedule_fe,cuts,color_harts=not args.gray_plot)
+                plot_schedule(L, schedule_fe, cuts, color_harts=not args.gray_plot)
         elif args.solve_csc:
             cuts = None
-            schedule_fe = [[Empty(0,0,0,0) for h in range(HARTS)]]
-            schedule_bs = [[Empty(0,0,0,0) for h in range(HARTS)]]
+            schedule_fe = [[Empty(0, 0, 0, 0) for h in range(HARTS)]]
+            schedule_bs = [[Empty(0, 0, 0, 0) for h in range(HARTS)]]
             schedule_fe[0][0] = CscTile(linsys)
             schedule_bs[0][0] = CscTile(linsys)
         elif args.psolve_csc or args.sssr_psolve_csc:
@@ -1450,117 +1560,211 @@ def main(args):
             schedule_fe = [[CscTile(linsys) for h in range(HARTS)]]
             schedule_bs = [[CscTile(linsys) for h in range(HARTS)]]
     elif args.plot:
-       (fig,ax,sq_dict) = L.plot(uselx = not args.gray_plot)
-       plot_cuts(args.test,ax,L.n,wd=args.wd,cuts=cuts,graph_part_cuts=graph_part_cuts)
-       plt.show()
+        (fig, ax, sq_dict) = L.plot(uselx=not args.gray_plot)
+        plot_cuts(
+            args.test, ax, L.n, wd=args.wd, cuts=cuts, graph_part_cuts=graph_part_cuts
+        )
+        plt.show()
 
     if args.codegen and args.parspl:
-        codegenSolver(args,schedule_fe,schedule_bs,cuts)
+        codegenSolver(args, schedule_fe, schedule_bs, cuts)
 
         # check that permutation is actually permuting anything
         if perm is None:
             perm = range(linsys.n)
-        perm = list2array(list(perm),'perm',base=16) # column permutation
-        permT =  np.argsort(perm) # row permutation
+        perm = list2array(list(perm), "perm", base=16)  # column permutation
+        permT = np.argsort(perm)  # row permutation
         # swap: the linear sytem solver assumes perm is the row permutation and
         #       permT the column one
-        #perm,permT = permT,perm
-        print(f'Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h')
-        writeWorkspaceToFile(args,linsys,firstbp=firstbp,lastbp=lastbp,permutation=perm)
+        # perm,permT = permT,perm
+        print(
+            f"Using firstbp {firstbp}, lastbp {lastbp} for code generation of bp_tmp_h"
+        )
+        writeWorkspaceToFile(
+            args, linsys, firstbp=firstbp, lastbp=lastbp, permutation=perm
+        )
 
     if args.solve_csc or args.psolve_csc or args.sssr_psolve_csc:
-        writeWorkspaceToFile(args,linsys)
+        writeWorkspaceToFile(args, linsys)
 
     # Dump files
     if args.dumpbuild:
-        subprocess.run(f'{CAT_CMD} {args.wd}/build/{args.test}/*',shell=True)
+        subprocess.run(f"{CAT_CMD} {args.wd}/build/{args.test}/*", shell=True)
 
     if args.link:
         if not args.codegen:
-            wprint('Linking without regenerating code')
-        bprint('\nLinking generated code to virtual verification environment')
+            wprint("Linking without regenerating code")
+        bprint("\nLinking generated code to virtual verification environment")
         wd = args.wd
-        links = [ f'rm -f {wd}/virtual/scheduled_data.h', f'rm -f {wd}/virtual/workspace.c', f'rm -f {wd}/virtual/workspace.h']
+        links = [
+            f"rm -f {wd}/virtual/scheduled_data.h",
+            f"rm -f {wd}/virtual/workspace.c",
+            f"rm -f {wd}/virtual/workspace.h",
+        ]
         if args.parspl:
-            links.append(f'ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h')
+            links.append(
+                f"ln -sf ../build/{args.test}/scheduled_data.h {wd}/virtual/scheduled_data.h"
+            )
         else:
-            links.append(f'touch {wd}/virtual/scheduled_data.h') #dummy
+            links.append(f"touch {wd}/virtual/scheduled_data.h")  # dummy
 
-        links.append(f'ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c')
-        links.append(f'ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h')
+        links.append(
+            f"ln -sf ../build/{args.test}/workspace.c {wd}/virtual/workspace.c"
+        )
+        links.append(
+            f"ln -sf ../build/{args.test}/workspace.h {wd}/virtual/workspace.h"
+        )
         for l in links:
             print(l)
-            subprocess.run(l,shell=True,check=True)
+            subprocess.run(l, shell=True, check=True)
 
     return vars()
+
 
 # Argument parsing
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    '--test', '-t', nargs='?',
-    default='_HPC_3x3_H2',
-    help='Testcase to take data from.',
+    "--test",
+    "-t",
+    nargs="?",
+    default="_HPC_3x3_H2",
+    help="Testcase to take data from.",
 )
-parser.add_argument('--live_cuts', '-l' ,action='store_true',
-    help='Interactively determine life cuts. Edit file livecuts to define the cuts for candidate X.')
-parser.add_argument('--use_cutfile', '-c' , action='store_true',
-    help='Used cuts proposed in cutfile to partition matrix into regions.')
-parser.add_argument('--schedule', '-S' , action='store_true',
-    help='Schedule cut appart matrix.')
-parser.add_argument('--interactive_schedule', action='store_true',
-    help='Schedule matrix interactively..')
-parser.add_argument('--plot', '-p' , action='store_true',
-    help='Color plot scheduled matrix.')
-parser.add_argument('--modolo', '-m' , action='store_true',
-    help='Color Matrix accodring to modolo schedule.')
-parser.add_argument('--codegen', '-g' , action='store_true',
-    help='Generate Code Structures from Schedule.')
-parser.add_argument('--level', action='store_true',
-    help='Compute level vector derived by level scheduling the L matrix. Show the levels and the amount of columns inside of each.')
-parser.add_argument('--level_schedule', action='store_true',
-    help='Level schedule and permute L matrix.')
-parser.add_argument('--level_thr', type=int, default=None,
-    help='Level threshold for partly level scheduling.')
-parser.add_argument('--auto_level_thr', action='store_true', default=None,
-    help='Automatically find a reasonable threshold and partly level schedule accordingly.')
-parser.add_argument('--occupation', action='store_true',
-    help='Compute row/column occupation, so number of elements.')
-parser.add_argument('--intra_level_reorder', action='store_true',
-    help='Permute, so sort increasingly, inside the levels by column occupation.')
-parser.add_argument('--gray_plot', action='store_true',
-    help='Plot cells in grey instead of color them by value.')
-parser.add_argument('--debug', action='store_true',
-    help='Debug print a lot of information. Use on small matrices.')
-parser.add_argument('--invert', action='store_true',
-    help='Invert L matrix')
-parser.add_argument('--dumpbuild', action='store_true',
-    help='Dump files in directory of problem to shell.')
-parser.add_argument('--lsolve', action='store_true',
-    help='Verify lsolve. Put golden model into workspace.')
-parser.add_argument('--ltsolve', action='store_true',
-    help='Verify ltsolve. Put golden model into workspace.')
-parser.add_argument('--solve', action='store_true',
-    help='Verify ldlsolve. Put golden model into workspace.')
-parser.add_argument('--link', action='store_true',
-    help='Link generated code to virtual verification environment.')
-parser.add_argument('--wd', type=str, default='.',
-    help='Working directory.')
-parser.add_argument('--numerical_analysis', action='store_true',
-    help='Working directory.')
-parser.add_argument('--heur_graph_cut', action='store_true',
-    help='Heuristic Graph partitioning/cutting using max-flow min-cut theorem to automatically extract dense lower triangular submatrices along the diagonal')
-parser.add_argument('--alap', action='store_true',
-    help='As Late As possible scheduling in optimization.')
-parser.add_argument('--sssr', action='store_true',
-    help='Use Sparse Streaming Semantic Register hardware accelerations.')
-parser.add_argument('--solve_csc', action='store_true',
-    help='By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.')
-parser.add_argument('--psolve_csc', action='store_true',
-    help='Specify this to generate code for the multi-core FE & BS using the common CSC matrix representation.')
-parser.add_argument('--sssr_psolve_csc', action='store_true',
-    help='psolve_csc with SSSRs')
+parser.add_argument(
+    "--live_cuts",
+    "-l",
+    action="store_true",
+    help="Interactively determine life cuts. Edit file livecuts to define the cuts for candidate X.",
+)
+parser.add_argument(
+    "--use_cutfile",
+    "-c",
+    action="store_true",
+    help="Used cuts proposed in cutfile to partition matrix into regions.",
+)
+parser.add_argument(
+    "--schedule", "-S", action="store_true", help="Schedule cut appart matrix."
+)
+parser.add_argument(
+    "--interactive_schedule",
+    action="store_true",
+    help="Schedule matrix interactively..",
+)
+parser.add_argument(
+    "--plot", "-p", action="store_true", help="Color plot scheduled matrix."
+)
+parser.add_argument(
+    "--modolo",
+    "-m",
+    action="store_true",
+    help="Color Matrix accodring to modolo schedule.",
+)
+parser.add_argument(
+    "--codegen",
+    "-g",
+    action="store_true",
+    help="Generate Code Structures from Schedule.",
+)
+parser.add_argument(
+    "--level",
+    action="store_true",
+    help="Compute level vector derived by level scheduling the L matrix. Show the levels and the amount of columns inside of each.",
+)
+parser.add_argument(
+    "--level_schedule", action="store_true", help="Level schedule and permute L matrix."
+)
+parser.add_argument(
+    "--level_thr",
+    type=int,
+    default=None,
+    help="Level threshold for partly level scheduling.",
+)
+parser.add_argument(
+    "--auto_level_thr",
+    action="store_true",
+    default=None,
+    help="Automatically find a reasonable threshold and partly level schedule accordingly.",
+)
+parser.add_argument(
+    "--occupation",
+    action="store_true",
+    help="Compute row/column occupation, so number of elements.",
+)
+parser.add_argument(
+    "--intra_level_reorder",
+    action="store_true",
+    help="Permute, so sort increasingly, inside the levels by column occupation.",
+)
+parser.add_argument(
+    "--gray_plot",
+    action="store_true",
+    help="Plot cells in grey instead of color them by value.",
+)
+parser.add_argument(
+    "--debug",
+    action="store_true",
+    help="Debug print a lot of information. Use on small matrices.",
+)
+parser.add_argument("--invert", action="store_true", help="Invert L matrix")
+parser.add_argument(
+    "--dumpbuild",
+    action="store_true",
+    help="Dump files in directory of problem to shell.",
+)
+parser.add_argument(
+    "--lsolve",
+    action="store_true",
+    help="Verify lsolve. Put golden model into workspace.",
+)
+parser.add_argument(
+    "--ltsolve",
+    action="store_true",
+    help="Verify ltsolve. Put golden model into workspace.",
+)
+parser.add_argument(
+    "--solve",
+    action="store_true",
+    help="Verify ldlsolve. Put golden model into workspace.",
+)
+parser.add_argument(
+    "--link",
+    action="store_true",
+    help="Link generated code to virtual verification environment.",
+)
+parser.add_argument("--wd", type=str, default=".", help="Working directory.")
+parser.add_argument(
+    "--numerical_analysis", action="store_true", help="Working directory."
+)
+parser.add_argument(
+    "--heur_graph_cut",
+    action="store_true",
+    help="Heuristic Graph partitioning/cutting using max-flow min-cut theorem to automatically extract dense lower triangular submatrices along the diagonal",
+)
+parser.add_argument(
+    "--alap",
+    action="store_true",
+    help="As Late As possible scheduling in optimization.",
+)
+parser.add_argument(
+    "--sssr",
+    action="store_true",
+    help="Use Sparse Streaming Semantic Register hardware accelerations.",
+)
+parser.add_argument(
+    "--solve_csc",
+    action="store_true",
+    help="By default the generated code is using the ParSPL methodology. Specify this to generate code for the single core FE & BS using the common CSC matrix representation.",
+)
+parser.add_argument(
+    "--psolve_csc",
+    action="store_true",
+    help="Specify this to generate code for the multi-core FE & BS using the common CSC matrix representation.",
+)
+parser.add_argument(
+    "--sssr_psolve_csc", action="store_true", help="psolve_csc with SSSRs"
+)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
     main(args)

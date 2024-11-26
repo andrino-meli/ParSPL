@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!TODO
 import numpy as np
 import argparse
 import os
@@ -15,6 +15,8 @@ from general import escape, NUM_CORES, HEARTS, eprint, wprint
 UNKNOWN = -1;
 USED = 1;
 UNUSED = 0
+
+# TODO: implement LDL decomposition in python
 
 # Convert LU decomposition into LDL
 #  by https://services.math.duke.edu/~jdr/2021f-218/materials/week11.pdf

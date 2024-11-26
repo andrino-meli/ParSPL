@@ -3,6 +3,7 @@ virtual/workspace.c
 virtual/workspace.h
 __pycache__/*
 build/*
+venv/*
 virtual/build/*
 */tags
 tags

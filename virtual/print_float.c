@@ -6,6 +6,7 @@ float fAbs(float x){
     return ((x<0.0F) ? (-x) : (x));
 }
 
+// a cheap printFloat for embedded enviornment that do not implement printf
 void printFloat(float f)
 {
   int j = 100000000;
