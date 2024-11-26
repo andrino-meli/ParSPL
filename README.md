@@ -100,9 +100,9 @@ We hope You find utility in ParSPL we encourage you to:
 │       └── workspace.h
 └── virtual
     ├── Makefile
-    ├── runtime.h               # environment specific functions and parameters, edit according to the target embedded platform
+    ├── runtime.h               # environment specific functions and parameters, **edit according to the target embedded platform**
     ├── parspl.c                # main parspl C file that implements all the corresponding kernels and the scheduler
-    ├── parspl.h                # the function you want to call is `solve(core_id)`
+    ├── parspl.h                # **the function you want to call is `solve(core_id)`**
     ├── main.c                  # repeated calls to the parspl linear system solver
     ├── virtual_main.c          # a wrapper of parspl.c for emulation with linux pthread
     ├── verify.h
