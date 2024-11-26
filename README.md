@@ -14,6 +14,9 @@ for x repeatedly and in parallel. Repeatedly means:
 - the matrix ```A``` is constant (static data)
 - the right hand side vector ```b``` changes (input)
 - the vector ```x``` is the computed solution (output)
+Because ```A``` is static we can do a compile time decomposition ```A=LDL^T```.
+ParSPL then further exploits the problem specific sparsity structure in the triangular ```L``` matrix to maximize concurrent computation.
+The preprocessing steps are visualized in **a)** to **f)**.
 
 For example: running an MPC controller using the OSQP solver results in such a computation.
 
