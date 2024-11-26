@@ -1,5 +1,5 @@
 # ParSPL
-[![Preview](docs/parspl.jpg)](docs/parspl.pdf)
+![ParSPL processing steps](docs/parspl.jpg)]
 
 ParSPL is a code generator to **parallelise repeated solutions of a sparse linear systems** on an embedded platform.
 In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
