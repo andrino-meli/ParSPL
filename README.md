@@ -22,7 +22,7 @@ The preprocessing steps are visualized in **a)** to **f)**.
 For example: running an MPC controller using the OSQP solver results in such a computation.
 
 
-# research publication
+## research publication
 ParSPL was developed in the context of thermal and energy management for high performance computing (HPC) chips.
 Think: voltage and frequency scaling on steroids.
 
@@ -35,27 +35,27 @@ The corresponding published paper can be found at TODO and explains the methodol
 The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
 
 
-# usage
-## python setup
+## usage
+### python setup
 ParSPL is a C-code generator written in python.
 A virtual environment and all required dependencies are installed by running
 ```
 > make setup
 ```
-## autocompletion
+### autocompletion
 For optional but usefull python argument autocompletion install and globaly activate argcomplete with:
 ```
 >pip3 install argcomplete
 >activate-global-python-argcomplete
 ```
-## seting up the linear system problem
+### seting up the linear system problem
 To allow for direct experimentation certain linear systems are prestored. List them with
 ```
 > make list
 ```
 TODO: How to integrate parspl into Your project:
 
-## code generation and verification by emulation
+### code generation and verification by emulation
 Select one and start with code generation.
 ```
 > ./parspl.py --test __HPC_3x3_H2 --codegen --link
@@ -71,19 +71,19 @@ Of course You are ment to include the generated C files into your embedded softw
 Play and experiment with many options of `parspl.py`.
 
 
-# Citing
+## Citing
 We hope You find utility in ParSPL we encourage you to:
 - put a start on this repo
 - cite us:
 
-# directory structure
+## directory structure
 ```
 .
 ├── Makefile
 ├── README.md
 ├── parspl.py                   # main script for code generation
 ├── data_format.py
-├── draw_mat_gui.py
+├── draw_mat_gui.py             # a script where one can custom generate L-matrix layouts by drawing for testing the effectiveness of pattern recognition
 ├── general.py
 ├── solve.py
 ├── venv                        #python virtual environment
