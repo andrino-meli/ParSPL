@@ -1,26 +1,31 @@
 # ParSPL
-ParSPL is a code generator to parallelise repeated solutions of a sparse linear systems on an embedded platform.
+ParSPL is a code generator to **parallelise repeated solutions of a sparse linear systems** on an embedded platform.
 In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
-You want it if you can trade-off *low compile-time* with *high runtime performance*.
+You want it if you can trade-off **low compile-time with high runtime performance**.
+
 ParSPL stands for Parallel Sparsity Pattern Levearaging linear system solver.
 
 Specifically we solve a linear system:
 ```
-Ax = b
+A x = b
 ```
-for x repeatedly and in parallel. Repeatedly means the matrix ```A``` is constant while the right hand side vector ```b``` changes with each solution.
+for x repeatedly and in parallel. Repeatedly means:
+- the matrix ```A``` is constant (static data)
+- the right hand side vector ```b``` changes (input)
+- the vector ```x``` is the computed solution (output)
 
 For example: running an MPC controller using the OSQP solver results in such a computation.
-
-
 
 # paper
 ParSPL was developed in the context of thermal and energy management for high performance computing (HPC) chips.
 Think: voltage and frequency scaling on steroids.
 
-For very large problems TODO: teaze with results.
+ParSPL is very good at extracting concurrency from a problem formulation.
+For very large problems we achieved a 7x speedup on an 8-core embedded platform.
+When using memory streaming hardware extensions one can utilize the concurrency even further.
+We demonstrated a **33x speedup** with ParSPL using SSSRs.
 
-The corresponding published paper is: <TODO>.
+The corresponding published paper is: TODO.
 The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
 Specifically the HPC management was 
 
