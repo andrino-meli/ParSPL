@@ -30,6 +30,7 @@ The embedded platform used is the famous snitch-cluster <https://github.com/pulp
 Specifically the HPC management was 
 
 # python setup
+ParSPL is a C-code generator written in python. The aim is to 
 Create and activate a virtual environment and install required packages
 ```
 python3 -m venv ./venv
@@ -37,8 +38,8 @@ source ./venv/bin/activate
 pip3 install argcomplete, networkx, matplotlib, scipy, pyqt5, bfloat16
 ```
 
-In case of some errors consider downgrading some packages.
-The following versions are shown to work:
+In case of errors consider version checking packages.
+The following should work:
 ```
 % python3 --version
 Python 3.12.4
