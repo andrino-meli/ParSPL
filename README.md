@@ -3,8 +3,9 @@ ParSPL is a code generator to **parallelise repeated solutions of a sparse linea
 In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
 You want it if you can trade-off **low compile-time with high runtime performance**.
 
-ParSPL stands for Parallel Sparsity Pattern Levearaging linear system solver.
+![ParSPL processing steps](docs/parspl.jpg)
 
+ParSPL stands for Parallel Sparsity Pattern Levearaging linear system solver.
 Specifically we solve a linear system:
 ```
 A x = b
@@ -16,7 +17,6 @@ for x repeatedly and in parallel. Repeatedly means:
 
 For example: running an MPC controller using the OSQP solver results in such a computation.
 
-![ParSPL processing steps](docs/parspl.jpg)
 
 # paper
 ParSPL was developed in the context of thermal and energy management for high performance computing (HPC) chips.
