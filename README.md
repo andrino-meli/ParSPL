@@ -1,13 +1,35 @@
-# parspl
-Parallel Sparsity Pattern Levearaging linear system solver
+# ParSPL
+ParSPL is a code generator to parallelise repeated solutions of a sparse linear systems on an embedded platform.
+In a nutshell it is used to extract parallelism from the SpTRSV kernel in a preprocessing step.
+You want it if you can trade-off *low compile-time* with *high runtime performance*.
+ParSPL stands for Parallel Sparsity Pattern Levearaging linear system solver.
 
-# installation
-## python setup
-Install and activate a virtual environment and install required packages
+Specifically we solve a linear system:
+```
+Ax = b
+```
+for x repeatedly and in parallel. Repeatedly means the matrix ```A``` is constant while the right hand side vector ```b``` changes with each solution.
+
+For example: running an MPC controller using the OSQP solver results in such a computation.
+
+
+
+# paper
+ParSPL was developed in the context of thermal and energy management for high performance computing (HPC) chips.
+Think: voltage and frequency scaling on steroids.
+
+For very large problems TODO: teaze with results.
+
+The corresponding published paper is: <TODO>.
+The embedded platform used is the famous snitch-cluster <https://github.com/pulp-platform/snitch_cluster> from the pulp-platform -- an open-hardware RISV-V 8 core architecture with a small scratchpad memory.
+Specifically the HPC management was 
+
+# python setup
+Create and activate a virtual environment and install required packages
 ```
 python3 -m venv ./venv
 source ./venv/bin/activate
-pip3 install argcomplete, networkx, matplotlib, scipy, pyqt5
+pip3 install argcomplete, networkx, matplotlib, scipy, pyqt5, bfloat16
 ```
 
 In case of some errors consider downgrading some packages.
@@ -35,4 +57,9 @@ PyQt5-Qt5       5.15.15
 PyQt5_sip       12.15.0
 python-dateutil 2.9.0.post0
 scipy           1.14.1
-six             1.16.
+six             1.16.0
+
+# Citing
+We hope You find utility in ParSPL we encourage you to:
+- put a start on this repo
+- cite us:
